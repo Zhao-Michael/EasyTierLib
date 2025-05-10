@@ -1929,6 +1929,7 @@ dependencies = [
  "jemalloc-sys",
  "jemallocator",
  "kcp-sys",
+ "libc",
  "machine-uid",
  "mimalloc-rust",
  "netlink-packet-core",
