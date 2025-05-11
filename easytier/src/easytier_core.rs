@@ -1132,8 +1132,7 @@ fn memory_monitor() {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-pub(crate) async fn main() -> ExitCode {
+pub(crate) async fn main(path: &str) -> ExitCode {
     let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en-US"));
     rust_i18n::set_locale(&locale);
     setup_panic_handler();
@@ -1157,7 +1156,7 @@ pub(crate) async fn main() -> ExitCode {
     set_prof_active(true);
     let _monitor = std::thread::spawn(memory_monitor);
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
     let mut ret_code = 0;
 
     if let Err(e) = run_main(cli).await {
