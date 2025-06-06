@@ -11,7 +11,7 @@ target-*/
 *.pdb
 
 .vscode
-/.idea
+.idea
 
 # perf & flamegraph
 perf.data
