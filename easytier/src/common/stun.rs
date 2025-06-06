@@ -8,8 +8,6 @@ use crate::proto::common::{NatType, StunInfo};
 use anyhow::Context;
 use chrono::Local;
 use crossbeam::atomic::AtomicCell;
-use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
-use hickory_resolver::TokioAsyncResolver;
 use rand::seq::IteratorRandom;
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::sync::{broadcast, Mutex};
@@ -22,44 +20,8 @@ use stun_codec::{Message, MessageClass, MessageDecoder, MessageEncoder};
 
 use crate::common::error::Error;
 
+use super::dns::resolve_txt_record;
 use super::stun_codec_ext::*;
-
-pub fn get_default_resolver_config() -> ResolverConfig {
-    let mut default_resolve_config = ResolverConfig::new();
-    default_resolve_config.add_name_server(NameServerConfig::new(
-        "223.5.5.5:53".parse().unwrap(),
-        Protocol::Udp,
-    ));
-    default_resolve_config.add_name_server(NameServerConfig::new(
-        "180.184.1.1:53".parse().unwrap(),
-        Protocol::Udp,
-    ));
-    default_resolve_config
-}
-
-pub async fn resolve_txt_record(
-    domain_name: &str,
-    resolver: &TokioAsyncResolver,
-) -> Result<String, Error> {
-    let response = resolver.txt_lookup(domain_name).await.with_context(|| {
-        format!(
-            "txt_lookup failed, domain_name: {}",
-            domain_name.to_string()
-        )
-    })?;
-
-    let txt_record = response.iter().next().with_context(|| {
-        format!(
-            "no txt record found, domain_name: {}",
-            domain_name.to_string()
-        )
-    })?;
-
-    let txt_data = String::from_utf8_lossy(&txt_record.txt_data()[0]);
-    tracing::info!(?txt_data, ?domain_name, "get txt record");
-
-    Ok(txt_data.to_string())
-}
 
 struct HostResolverIter {
     hostnames: Vec<String>,
@@ -79,10 +41,7 @@ impl HostResolverIter {
     }
 
     async fn get_txt_record(domain_name: &str) -> Result<Vec<String>, Error> {
-        let resolver = TokioAsyncResolver::tokio_from_system_conf().unwrap_or(
-            TokioAsyncResolver::tokio(get_default_resolver_config(), ResolverOpts::default()),
-        );
-        let txt_data = resolve_txt_record(domain_name, &resolver).await?;
+        let txt_data = resolve_txt_record(domain_name).await?;
         Ok(txt_data.split(" ").map(|x| x.to_string()).collect())
     }
 
@@ -802,7 +761,10 @@ impl StunInfoCollector {
     async fn get_public_ipv6(servers: &Vec<String>) -> Option<Ipv6Addr> {
         let mut ips = HostResolverIter::new(servers.to_vec(), 10, true);
         while let Some(ip) = ips.next().await {
-            let udp = Arc::new(UdpSocket::bind(format!("[::]:0")).await.unwrap());
+            let Ok(udp_socket) = UdpSocket::bind(format!("[::]:0")).await else {
+                break;
+            };
+            let udp = Arc::new(udp_socket);
             let ret = StunClientBuilder::new(udp.clone())
                 .new_stun_client(ip)
                 .bind_request(false, false)
@@ -928,7 +890,7 @@ impl StunInfoCollectorTrait for MockStunInfoCollector {
             last_update_time: std::time::Instant::now().elapsed().as_secs() as i64,
             min_port: 100,
             max_port: 200,
-            public_ip: vec!["127.0.0.1".to_string()],
+            public_ip: vec!["127.0.0.1".to_string(), "::1".to_string()],
         }
     }
 

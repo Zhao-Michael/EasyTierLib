@@ -61,11 +61,11 @@ pub struct GlobalCtx {
     cached_ipv4: AtomicCell<Option<cidr::Ipv4Inet>>,
     cached_proxy_cidrs: AtomicCell<Option<Vec<cidr::IpCidr>>>,
 
-    ip_collector: Arc<IPCollector>,
+    ip_collector: Mutex<Option<Arc<IPCollector>>>,
 
-    hostname: String,
+    hostname: Mutex<String>,
 
-    stun_info_collection: Box<dyn StunInfoCollectorTrait>,
+    stun_info_collection: Mutex<Arc<dyn StunInfoCollectorTrait>>,
 
     running_listeners: Mutex<Vec<url::Url>>,
 
@@ -120,11 +120,14 @@ impl GlobalCtx {
             cached_ipv4: AtomicCell::new(None),
             cached_proxy_cidrs: AtomicCell::new(None),
 
-            ip_collector: Arc::new(IPCollector::new(net_ns, stun_info_collection.clone())),
+            ip_collector: Mutex::new(Some(Arc::new(IPCollector::new(
+                net_ns,
+                stun_info_collection.clone(),
+            )))),
 
-            hostname,
+            hostname: Mutex::new(hostname),
 
-            stun_info_collection: Box::new(stun_info_collection),
+            stun_info_collection: Mutex::new(stun_info_collection),
 
             running_listeners: Mutex::new(Vec::new()),
 
@@ -215,26 +218,30 @@ impl GlobalCtx {
     }
 
     pub fn get_ip_collector(&self) -> Arc<IPCollector> {
-        self.ip_collector.clone()
+        self.ip_collector.lock().unwrap().as_ref().unwrap().clone()
     }
 
     pub fn get_hostname(&self) -> String {
-        return self.hostname.clone();
+        return self.hostname.lock().unwrap().clone();
     }
 
-    pub fn get_stun_info_collector(&self) -> impl StunInfoCollectorTrait + '_ {
-        self.stun_info_collection.as_ref()
+    pub fn set_hostname(&self, hostname: String) {
+        *self.hostname.lock().unwrap() = hostname;
+    }
+
+    pub fn get_stun_info_collector(&self) -> Arc<dyn StunInfoCollectorTrait> {
+        self.stun_info_collection.lock().unwrap().clone()
     }
 
     pub fn replace_stun_info_collector(&self, collector: Box<dyn StunInfoCollectorTrait>) {
-        // force replace the stun_info_collection without mut and drop the old one
-        let ptr = &self.stun_info_collection as *const Box<dyn StunInfoCollectorTrait>;
-        let ptr = ptr as *mut Box<dyn StunInfoCollectorTrait>;
-        unsafe {
-            std::ptr::drop_in_place(ptr);
-            #[allow(invalid_reference_casting)]
-            std::ptr::write(ptr, collector);
-        }
+        let arc_collector: Arc<dyn StunInfoCollectorTrait> = Arc::new(collector);
+        *self.stun_info_collection.lock().unwrap() = arc_collector.clone();
+
+        // rebuild the ip collector
+        *self.ip_collector.lock().unwrap() = Some(Arc::new(IPCollector::new(
+            self.net_ns.clone(),
+            arc_collector,
+        )));
     }
 
     pub fn get_running_listeners(&self) -> Vec<url::Url> {
@@ -300,7 +307,10 @@ impl GlobalCtx {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::common::{config::TomlConfigLoader, new_peer_id};
+    use crate::{
+        common::{config::TomlConfigLoader, new_peer_id, stun::MockStunInfoCollector},
+        proto::common::NatType,
+    };
 
     use super::*;
 
@@ -340,7 +350,12 @@ pub mod tests {
         let config_fs = TomlConfigLoader::default();
         config_fs.set_inst_name(format!("test_{}", config_fs.get_id()));
         config_fs.set_network_identity(network_identy.unwrap_or(NetworkIdentity::default()));
-        std::sync::Arc::new(GlobalCtx::new(config_fs))
+
+        let ctx = Arc::new(GlobalCtx::new(config_fs));
+        ctx.replace_stun_info_collector(Box::new(MockStunInfoCollector {
+            udp_nat_type: NatType::Unknown,
+        }));
+        ctx
     }
 
     pub fn get_mock_global_ctx() -> ArcGlobalCtx {

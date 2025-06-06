@@ -3,7 +3,7 @@ name = "easytier"
 description = "A full meshed p2p VPN, connecting all your devices in one network with one command."
 homepage = "https://github.com/EasyTier/EasyTier"
 repository = "https://github.com/EasyTier/EasyTier"
-version = "2.2.4"
+version = "2.3.1"
 edition = "2021"
 authors = ["kkrainbow"]
 keywords = ["vpn", "p2p", "network", "easytier"]
@@ -140,6 +140,7 @@ network-interface = "2.0"
 
 # for ospf route
 petgraph = "0.8.1"
+hashbrown = "0.15.3"
 
 # for wireguard
 boringtun = { package = "boringtun-easytier", version = "0.6.1", optional = true }
@@ -155,7 +156,7 @@ humansize = "2.1.3"
 
 base64 = "0.22"
 
-mimalloc-rust = { version = "0.2.1", optional = true }
+mimalloc = { version = "*", optional = true }
 
 # mips
 atomic-shim = "0.2.0"
@@ -187,10 +188,7 @@ async-ringbuf = "0.3.1"
 
 service-manager = { git = "https://github.com/chipsenkbeil/service-manager-rs.git", branch = "main" }
 
-async-compression = { version = "0.4.17", default-features = false, features = [
-    "zstd",
-    "tokio",
-] }
+zstd = { version = "0.13" }
 
 kcp-sys = { git = "https://github.com/EasyTier/kcp-sys" }
 
@@ -204,9 +202,16 @@ http_req = { git = "https://github.com/EasyTier/http_req.git", default-features 
 ] }
 
 # for dns connector
-hickory-resolver = "0.24.4"
+hickory-resolver = "0.25.2"
+hickory-proto = "0.25.2"
 
-bounded_join_set = "0.3.0"
+# for magic dns
+hickory-client = "0.25.2"
+hickory-server = { version = "0.25.2", features = ["resolver"] }
+derive_builder = "0.20.2"
+humantime-serde = "1.1.1"
+multimap = "0.10.0"
+version-compare = "0.2.0"
 
 jemallocator = { version = "0.5.4", optional = true }
 jemalloc-ctl = { version = "0.5.4", optional = true }
@@ -224,6 +229,10 @@ netlink-sys = "0.8.7"
 netlink-packet-route = "0.21.0"
 netlink-packet-core = { version = "0.7.0" }
 netlink-packet-utils = "0.5.2"
+# for magic dns
+resolv-conf = "0.7.3"
+dbus = { version = "0.9.7", features = ["vendored"] }
+which = "7.0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.52.0", features = [
@@ -251,7 +260,7 @@ prost-reflect-build = { version = "0.14.0" }
 
 [target.'cfg(windows)'.build-dependencies]
 reqwest = { version = "0.12.12", features = ["blocking"] }
-zip = "0.6.6"
+zip = "4.0.0"
 
 # enable thunk-rs when compiling for x86_64 or i686 windows
 [target.x86_64-pc-windows-msvc.build-dependencies]
@@ -265,6 +274,7 @@ thunk-rs = { git = "https://github.com/easytier/thunk.git", default-features = f
 serial_test = "3.0.0"
 rstest = "0.18.2"
 futures-util = "0.3.30"
+maplit = "1.0.2"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 defguard_wireguard_rs = "0.4.2"
@@ -286,7 +296,7 @@ full = [
 mips = ["aes-gcm", "mimalloc", "wireguard", "tun", "smoltcp", "socks5"]
 wireguard = ["dep:boringtun", "dep:ring"]
 quic = ["dep:quinn", "dep:rustls", "dep:rcgen"]
-mimalloc = ["dep:mimalloc-rust"]
+mimalloc = ["dep:mimalloc"]
 aes-gcm = ["dep:aes-gcm"]
 tun = ["dep:tun"]
 websocket = [

@@ -62,6 +62,9 @@ export interface NetworkConfig {
 
   mtu: number | null
   mapped_listeners: string[]
+
+  enable_magic_dns?: boolean
+  enable_private_mode?: boolean
 }
 
 export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
@@ -118,6 +121,8 @@ export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
     socks5_port: 1080,
     mtu: null,
     mapped_listeners: [],
+    enable_magic_dns: false,
+    enable_private_mode: false,
   }
 }
 

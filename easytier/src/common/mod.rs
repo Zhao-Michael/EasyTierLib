@@ -4,6 +4,7 @@ use std::{
     io::Write as _,
     sync::{Arc, Mutex},
 };
+use time::util::refresh_tz;
 use tokio::{task::JoinSet, time::timeout};
 use tracing::Instrument;
 
@@ -11,6 +12,7 @@ pub mod compressor;
 pub mod config;
 pub mod constants;
 pub mod defer;
+pub mod dns;
 pub mod error;
 pub mod global_ctx;
 pub mod ifcfg;
@@ -23,9 +25,7 @@ pub mod stun_codec_ext;
 pub fn get_logger_timer<F: time::formatting::Formattable>(
     format: F,
 ) -> tracing_subscriber::fmt::time::OffsetTime<F> {
-    unsafe {
-        time::util::local_offset::set_soundness(time::util::local_offset::Soundness::Unsound)
-    };
+    refresh_tz();
     let local_offset = time::UtcOffset::current_local_offset()
         .unwrap_or(time::UtcOffset::from_whole_seconds(0).unwrap());
     tracing_subscriber::fmt::time::OffsetTime::new(local_offset, format)
@@ -108,6 +108,9 @@ pub fn get_machine_id() -> uuid::Uuid {
     ))]
     let gen_mid = machine_uid::get()
         .map(|x| {
+            if x.is_empty() {
+                return uuid::Uuid::new_v4();
+            }
             let mut b = [0u8; 16];
             crate::tunnel::generate_digest_from_str("", x.as_str(), &mut b);
             uuid::Uuid::from_bytes(b)

@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use axum_login::tower_sessions::{ExpiredDeletion, SessionManagerLayer};
-use axum_login::{login_required, AuthManagerLayerBuilder, AuthzBackend};
+use axum_login::{login_required, AuthManagerLayerBuilder, AuthUser, AuthzBackend};
 use axum_messages::MessagesManagerLayer;
 use easytier::common::config::ConfigLoader;
 use easytier::common::scoped_task::ScopedTask;
@@ -24,20 +24,26 @@ use tower_sessions::Expiry;
 use tower_sessions_sqlx_store::SqliteStore;
 use users::{AuthSession, Backend};
 
-use crate::client_manager::session::Session;
 use crate::client_manager::storage::StorageToken;
 use crate::client_manager::ClientManager;
 use crate::db::Db;
+
+/// Embed assets for web dashboard, build frontend first
+#[cfg(feature = "embed")]
+#[derive(rust_embed::RustEmbed, Clone)]
+#[folder = "frontend/dist/"]
+struct Assets;
 
 pub struct RestfulServer {
     bind_addr: SocketAddr,
     client_mgr: Arc<ClientManager>,
     db: Db,
 
-    serve_task: Option<ScopedTask<()>>,
-    delete_task: Option<ScopedTask<tower_sessions::session_store::Result<()>>>,
-
+    // serve_task: Option<ScopedTask<()>>,
+    // delete_task: Option<ScopedTask<tower_sessions::session_store::Result<()>>>,
     network_api: NetworkApi,
+
+    web_router: Option<Router>,
 }
 
 type AppStateInner = Arc<ClientManager>;
@@ -87,6 +93,7 @@ impl RestfulServer {
         bind_addr: SocketAddr,
         client_mgr: Arc<ClientManager>,
         db: Db,
+        web_router: Option<Router>,
     ) -> anyhow::Result<Self> {
         assert!(client_mgr.is_running());
 
@@ -96,21 +103,11 @@ impl RestfulServer {
             bind_addr,
             client_mgr,
             db,
-            serve_task: None,
-            delete_task: None,
+            // serve_task: None,
+            // delete_task: None,
             network_api,
+            web_router,
         })
-    }
-
-    async fn get_session_by_machine_id(
-        client_mgr: &ClientManager,
-        machine_id: &uuid::Uuid,
-    ) -> Result<Arc<Session>, HttpHandleError> {
-        let Some(result) = client_mgr.get_session_by_machine_id(machine_id) else {
-            return Err((StatusCode::NOT_FOUND, other_error("No such session").into()));
-        };
-
-        Ok(result)
     }
 
     async fn handle_list_all_sessions(
@@ -135,9 +132,7 @@ impl RestfulServer {
             return Err((StatusCode::UNAUTHORIZED, other_error("No such user").into()));
         };
 
-        let machines = client_mgr
-            .list_machine_by_token(user.tokens[0].clone())
-            .await;
+        let machines = client_mgr.list_machine_by_user_id(user.id().clone()).await;
 
         Ok(GetSummaryJsonResp {
             device_count: machines.len() as u32,
@@ -163,7 +158,15 @@ impl RestfulServer {
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn start(
+        mut self,
+    ) -> Result<
+        (
+            ScopedTask<()>,
+            ScopedTask<tower_sessions::session_store::Result<()>>,
+        ),
+        anyhow::Error,
+    > {
         let listener = TcpListener::bind(self.bind_addr).await?;
 
         // Session layer.
@@ -173,14 +176,13 @@ impl RestfulServer {
         let session_store = SqliteStore::new(self.db.inner());
         session_store.migrate().await?;
 
-        self.delete_task.replace(
+        let delete_task: ScopedTask<tower_sessions::session_store::Result<()>> =
             tokio::task::spawn(
                 session_store
                     .clone()
                     .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
             )
-            .into(),
-        );
+            .into();
 
         // Generate a cryptographic key to sign the session cookie.
         let key = Key::generate();
@@ -219,11 +221,18 @@ impl RestfulServer {
             .layer(tower_http::cors::CorsLayer::very_permissive())
             .layer(compression_layer);
 
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        self.serve_task = Some(task.into());
+        #[cfg(feature = "embed")]
+        let app = if let Some(web_router) = self.web_router.take() {
+            app.merge(web_router)
+        } else {
+            app
+        };
 
-        Ok(())
+        let serve_task: ScopedTask<()> = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        })
+        .into();
+
+        Ok((serve_task, delete_task))
     }
 }

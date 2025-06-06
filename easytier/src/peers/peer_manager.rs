@@ -2,7 +2,7 @@ use std::{
     fmt::Debug,
     net::Ipv4Addr,
     sync::{Arc, Weak},
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
 
 use anyhow::Context;
@@ -120,7 +120,7 @@ pub struct PeerManager {
     global_ctx: ArcGlobalCtx,
     nic_channel: PacketRecvChan,
 
-    tasks: Arc<Mutex<JoinSet<()>>>,
+    tasks: Mutex<JoinSet<()>>,
 
     packet_recv: Arc<Mutex<Option<PacketRecvChanReceiver>>>,
 
@@ -249,7 +249,7 @@ impl PeerManager {
             global_ctx,
             nic_channel,
 
-            tasks: Arc::new(Mutex::new(JoinSet::new())),
+            tasks: Mutex::new(JoinSet::new()),
 
             packet_recv: Arc::new(Mutex::new(Some(packet_recv))),
 
@@ -389,6 +389,15 @@ impl PeerManager {
         });
     }
 
+    pub async fn add_direct_tunnel(
+        &self,
+        t: Box<dyn Tunnel>,
+    ) -> Result<(PeerId, PeerConnId), Error> {
+        let (peer_id, conn_id) = self.add_client_tunnel(t).await?;
+        self.add_directly_connected_conn(peer_id, conn_id);
+        Ok((peer_id, conn_id))
+    }
+
     #[tracing::instrument]
     pub async fn try_direct_connect<C>(
         &self,
@@ -401,9 +410,7 @@ impl PeerManager {
         let t = ns
             .run_async(|| async move { connector.connect().await })
             .await?;
-        let (peer_id, conn_id) = self.add_client_tunnel(t).await?;
-        self.add_directly_connected_conn(peer_id, conn_id);
-        Ok((peer_id, conn_id))
+        self.add_direct_tunnel(t).await
     }
 
     #[tracing::instrument]
@@ -415,6 +422,14 @@ impl PeerManager {
         tracing::info!("add tunnel as server start");
         let mut peer = PeerConn::new(self.my_peer_id, self.global_ctx.clone(), tunnel);
         peer.do_handshake_as_server().await?;
+        if self.global_ctx.config.get_flags().private_mode
+            && peer.get_network_identity().network_name
+                != self.global_ctx.get_network_identity().network_name
+        {
+            return Err(Error::SecretKeyError(
+                "private mode is turned on, network identity not match".to_string(),
+            ));
+        }
         if peer.get_network_identity().network_name
             == self.global_ctx.get_network_identity().network_name
         {
@@ -735,6 +750,10 @@ impl PeerManager {
         self.get_route().list_routes().await
     }
 
+    pub async fn get_route_peer_info_last_update_time(&self) -> Instant {
+        self.get_route().get_peer_info_last_update_time().await
+    }
+
     pub async fn dump_route(&self) -> String {
         self.get_route().dump().await
     }
@@ -764,6 +783,16 @@ impl PeerManager {
     async fn run_nic_packet_process_pipeline(&self, data: &mut ZCPacket) {
         for pipeline in self.nic_packet_process_pipeline.read().await.iter().rev() {
             let _ = pipeline.try_process_packet_from_nic(data).await;
+        }
+    }
+
+    pub async fn remove_nic_packet_process_pipeline(&self, id: String) -> Result<(), Error> {
+        let mut pipelines = self.nic_packet_process_pipeline.write().await;
+        if let Some(pos) = pipelines.iter().position(|x| x.id() == id) {
+            pipelines.remove(pos);
+            Ok(())
+        } else {
+            Err(Error::NotFound)
         }
     }
 
@@ -1057,7 +1086,8 @@ mod tests {
     use crate::{
         common::{config::Flags, global_ctx::tests::get_mock_global_ctx},
         connector::{
-            create_connector_by_url, udp_hole_punch::tests::create_mock_peer_manager_with_mock_stun,
+            create_connector_by_url, direct::PeerManagerForDirectConnector,
+            udp_hole_punch::tests::create_mock_peer_manager_with_mock_stun,
         },
         instance::listeners::get_listener_by_url,
         peers::{
@@ -1068,7 +1098,12 @@ mod tests {
             tests::{connect_peer_manager, wait_route_appear, wait_route_appear_with_cost},
         },
         proto::common::{CompressionAlgoPb, NatType, PeerFeatureFlag},
-        tunnel::{common::tests::wait_for_condition, TunnelConnector, TunnelListener},
+        tunnel::{
+            common::tests::wait_for_condition,
+            filter::{tests::DropSendTunnelFilter, TunnelWithFilter},
+            ring::create_ring_tunnel_pair,
+            TunnelConnector, TunnelListener,
+        },
     };
 
     use super::PeerManager;
@@ -1247,6 +1282,12 @@ mod tests {
         let peer_mgr_d = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
         let peer_mgr_e = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
 
+        println!("peer_mgr_a: {}", peer_mgr_a.my_peer_id);
+        println!("peer_mgr_b: {}", peer_mgr_b.my_peer_id);
+        println!("peer_mgr_c: {}", peer_mgr_c.my_peer_id);
+        println!("peer_mgr_d: {}", peer_mgr_d.my_peer_id);
+        println!("peer_mgr_e: {}", peer_mgr_e.my_peer_id);
+
         connect_peer_manager(peer_mgr_a.clone(), peer_mgr_b.clone()).await;
         connect_peer_manager(peer_mgr_b.clone(), peer_mgr_c.clone()).await;
 
@@ -1301,5 +1342,37 @@ mod tests {
             .get_next_hop_with_policy(peer_mgr_c.my_peer_id, NextHopPolicy::LeastCost)
             .await;
         assert_eq!(ret, Some(peer_mgr_b.my_peer_id));
+    }
+
+    #[tokio::test]
+    async fn test_client_inbound_blackhole() {
+        let peer_mgr_a = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
+        let peer_mgr_b = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
+
+        // a is client, b is server
+
+        let (a_ring, b_ring) = create_ring_tunnel_pair();
+        let a_ring = Box::new(TunnelWithFilter::new(
+            a_ring,
+            DropSendTunnelFilter::new(2, 50000),
+        ));
+
+        let a_mgr_copy = peer_mgr_a.clone();
+        tokio::spawn(async move {
+            a_mgr_copy.add_client_tunnel(a_ring).await.unwrap();
+        });
+        let b_mgr_copy = peer_mgr_b.clone();
+        tokio::spawn(async move {
+            b_mgr_copy.add_tunnel_as_server(b_ring, true).await.unwrap();
+        });
+
+        wait_for_condition(
+            || async {
+                let peers = peer_mgr_a.list_peers().await;
+                peers.is_empty()
+            },
+            Duration::from_secs(10),
+        )
+        .await;
     }
 }
