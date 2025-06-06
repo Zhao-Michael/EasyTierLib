@@ -1,0 +1,13 @@
+listeners = [ "tcp://0.0.0.0:11010", "udp://0.0.0.0:11010", "wg://0.0.0.0:11011", "ws://0.0.0.0:11011/", "wss://0.0.0.0:11012/" ]
+hostname = "台式机1"
+dhcp = true
+peer = [ { uri = "tcp://47.239.83.26:11010" } ]
+
+[network_identity]
+network_name = "GIT_SYSTEM"
+network_secret = "GIT_SYSTEM"
+
+[flags]
+enable_kcp_proxy = true
+disable_ipv6 = true
+use_smoltcp = true

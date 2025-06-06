@@ -44,6 +44,8 @@ static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
 
 #[cfg(feature = "jemalloc")]
 use jemalloc_ctl::{epoch, stats, Access as _, AsName as _};
+use crate::helper::g_instance;
+use crate::instance::instance::Instance;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -1033,7 +1035,7 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
 
 async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let cfg = TomlConfigLoader::try_from(&cli)?;
-    init_logger(&cfg, false)?;
+    //init_logger(&cfg, false)?;
 
     if cli.config_server.is_some() {
         let config_server_url_s = cli.config_server.clone().unwrap();
@@ -1094,11 +1096,16 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
 
     let mut l = launcher::NetworkInstance::new(cfg).set_fetch_node_info(false);
     let _t = ScopedTask::from(handle_event(l.start().unwrap()));
+    let token = &crate::helper::get_token();
     tokio::select! {
         e = l.wait() => {
             if let Some(e) = e {
                 eprintln!("launcher error: {}", e);
             }
+        }
+        // 监听取消令牌
+        _ = token.cancelled() => {
+            println!("任务被取消");
         }
         _ = tokio::signal::ctrl_c() => {
             println!("ctrl-c received, exiting...");
@@ -1147,7 +1154,8 @@ fn memory_monitor() {
     }
 }
 
-pub(crate) async fn main(path: &str) -> ExitCode {
+#[tokio::main(flavor = "current_thread")]
+pub(crate) async fn main() -> ExitCode {
     let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en-US"));
     rust_i18n::set_locale(&locale);
     setup_panic_handler();
@@ -1171,7 +1179,7 @@ pub(crate) async fn main(path: &str) -> ExitCode {
     set_prof_active(true);
     let _monitor = std::thread::spawn(memory_monitor);
 
-    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let cli = Cli::parse();
     let mut ret_code = 0;
 
     if let Err(e) = run_main(cli).await {
@@ -1185,4 +1193,22 @@ pub(crate) async fn main(path: &str) -> ExitCode {
     set_prof_active(false);
 
     ExitCode::from(ret_code)
+}
+
+pub(crate) async fn run(path: &str) -> u8 {
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let mut ret_code = 0;
+    if let Err(e) = run_main(cli).await {
+        eprintln!("error: {:?}", e);
+        ret_code = 1;
+    }
+
+    ret_code
+}
+
+pub async fn init_instance(path: &str) {
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let cfg = TomlConfigLoader::try_from(&cli).unwrap();
+    let mut guard = g_instance.write().await;
+    *guard = Some(Instance::new(cfg));
 }
