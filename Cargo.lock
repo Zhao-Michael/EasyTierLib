@@ -1986,6 +1986,7 @@ dependencies = [
  "jemalloc-sys",
  "jemallocator",
  "kcp-sys",
+ "lazy_static",
  "libc",
  "machine-uid",
  "maplit",

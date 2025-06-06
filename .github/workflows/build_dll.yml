@@ -1,0 +1,75 @@
+name: BuildEasytier
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    tags:
+      - "*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # necessary for windows
+    shell: bash
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt update
+          sudo apt install tree -y 
+          sudo apt install -y build-essential
+          sudo apt install -y \
+            gcc-aarch64-linux-gnu \
+            mingw-w64 \
+            gcc-x86-64-linux-gnu \
+            musl-tools
+
+      # - name: Install Cross
+      #   run: cargo install cross       -       x86_64-pc-windows-msvc
+
+      - name: Install Rust Targets
+        run: |
+          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v2
+        with:
+          # GitHub repo token to use to avoid rate limiter
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # - name: Build for Windows (MSVC)
+      #   run: |
+      #     cd easytier
+      #     cross build --target x86_64-pc-windows-msvc --release
+
+      - name: Build for Linux (x86_64 and aarch64)
+        run: |
+          cd easytier
+          cargo build --target x86_64-unknown-linux-gnu --release
+          cargo build --target aarch64-unknown-linux-gnu --release
+
+      - name: Package Binaries
+        run: |
+          mkdir -p release_binaries
+          cp target/x86_64-unknown-linux-gnu/release/libeasytier.so release_binaries/easytier-linux-x86_64.so
+          cp target/aarch64-unknown-linux-gnu/release/libeasytier.so release_binaries/easytier-linux-arm64.so
+
+      - name: Create Release & Upload Artifacts
+        uses: softprops/action-gh-release@v1
+        if: github.ref_type == 'tag'
+        with:
+          make_latest: 'tag_name'
+          files: |
+            release_binaries/easytier-linux-x86_64.so
+            release_binaries/easytier-linux-arm64.so
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

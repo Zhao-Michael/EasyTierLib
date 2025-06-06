@@ -4,6 +4,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
+use crate::helper::{g_instance};
 use crate::{
     common::{
         config::{
@@ -135,77 +136,84 @@ impl EasyTierLauncher {
         data: Arc<EasyTierData>,
         fetch_node_info: bool,
     ) -> Result<(), anyhow::Error> {
-        let mut instance = Instance::new(cfg);
-        let peer_mgr = instance.get_peer_manager();
-
         let mut tasks = JoinSet::new();
 
-        // Subscribe to global context events
-        let global_ctx = instance.get_global_ctx();
-        let data_c = data.clone();
-        tasks.spawn(async move {
-            let mut receiver = global_ctx.subscribe();
-            loop {
-                match receiver.recv().await {
-                    Ok(event) => {
-                        Self::handle_easytier_event(event.clone(), &data_c).await;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // do nothing currently
-                        receiver = receiver.resubscribe();
-                    }
-                }
-            }
-        });
+        {
+            let guard = g_instance.read().await;
+            let peer_mgr = guard.as_ref().unwrap().get_peer_manager();
 
-        // update my node info
-        if fetch_node_info {
+            // Subscribe to global context events
+            let global_ctx = guard.as_ref().unwrap().get_global_ctx();
             let data_c = data.clone();
-            let global_ctx_c = instance.get_global_ctx();
-            let peer_mgr_c = peer_mgr.clone();
-            let vpn_portal = instance.get_vpn_portal_inst();
             tasks.spawn(async move {
+                let mut receiver = global_ctx.subscribe();
                 loop {
-                    // Update TUN Device Name
-                    *data_c.tun_dev_name.write().unwrap() =
-                        global_ctx_c.get_flags().dev_name.clone();
-
-                    let node_info = MyNodeInfo {
-                        virtual_ipv4: global_ctx_c.get_ipv4().map(|ip| ip.into()),
-                        hostname: global_ctx_c.get_hostname(),
-                        version: EASYTIER_VERSION.to_string(),
-                        ips: Some(global_ctx_c.get_ip_collector().collect_ip_addrs().await),
-                        stun_info: Some(global_ctx_c.get_stun_info_collector().get_stun_info()),
-                        listeners: global_ctx_c
-                            .get_running_listeners()
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        vpn_portal_cfg: Some(
-                            vpn_portal
-                                .lock()
-                                .await
-                                .dump_client_config(peer_mgr_c.clone())
-                                .await,
-                        ),
-                    };
-                    *data_c.my_node_info.write().unwrap() = node_info.clone();
-                    *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
-                    *data_c.peers.write().unwrap() = PeerManagerRpcService::new(peer_mgr_c.clone())
-                        .list_peers()
-                        .await;
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    match receiver.recv().await {
+                        Ok(event) => {
+                            Self::handle_easytier_event(event.clone(), &data_c).await;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            // do nothing currently
+                            receiver = receiver.resubscribe();
+                        }
+                    }
                 }
             });
+
+            // update my node info
+            if fetch_node_info {
+                let data_c = data.clone();
+                let global_ctx_c = guard.as_ref().unwrap().get_global_ctx();
+                let peer_mgr_c = peer_mgr.clone();
+                let vpn_portal = guard.as_ref().unwrap().get_vpn_portal_inst();
+                tasks.spawn(async move {
+                    loop {
+                        // Update TUN Device Name
+                        *data_c.tun_dev_name.write().unwrap() =
+                            global_ctx_c.get_flags().dev_name.clone();
+
+                        let node_info = MyNodeInfo {
+                            virtual_ipv4: global_ctx_c.get_ipv4().map(|ip| ip.into()),
+                            hostname: global_ctx_c.get_hostname(),
+                            version: EASYTIER_VERSION.to_string(),
+                            ips: Some(global_ctx_c.get_ip_collector().collect_ip_addrs().await),
+                            stun_info: Some(global_ctx_c.get_stun_info_collector().get_stun_info()),
+                            listeners: global_ctx_c
+                                .get_running_listeners()
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
+                            vpn_portal_cfg: Some(
+                                vpn_portal
+                                    .lock()
+                                    .await
+                                    .dump_client_config(peer_mgr_c.clone())
+                                    .await,
+                            ),
+                        };
+                        *data_c.my_node_info.write().unwrap() = node_info.clone();
+                        *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
+                        *data_c.peers.write().unwrap() =
+                            PeerManagerRpcService::new(peer_mgr_c.clone())
+                                .list_peers()
+                                .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                });
+            }
+
+            #[cfg(target_os = "android")]
+            Self::run_routine_for_android(&instance, &data, &mut tasks).await;
         }
 
-        #[cfg(target_os = "android")]
-        Self::run_routine_for_android(&instance, &data, &mut tasks).await;
-
-        instance.run().await?;
+        {
+            let mut w_guard = g_instance.write().await;
+            w_guard.as_mut().unwrap().run().await?;
+        }
+        
         stop_signal.notified().await;
 
         tasks.abort_all();

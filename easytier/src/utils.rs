@@ -140,7 +140,7 @@ pub fn setup_panic_handler() {
         let panic_count = PANIC_COUNT.with(|c| *c.borrow());
         if panic_count > 1 {
             println!("panic happened more than once, exit immediately");
-            std::process::exit(1);
+            // std::process::exit(1);
         }
 
         let payload = info.payload();
@@ -207,7 +207,7 @@ pub fn setup_panic_handler() {
         let backtrace = backtrace::Backtrace::force_capture();
         write_err(format!("backtrace: {:#?}", backtrace));
 
-        std::process::exit(1);
+        // std::process::exit(1);
     }));
 }
 
