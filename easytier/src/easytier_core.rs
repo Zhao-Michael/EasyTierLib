@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::Context;
 use clap::Parser;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     common::{
@@ -44,6 +45,7 @@ static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
 
 #[cfg(feature = "jemalloc")]
 use jemalloc_ctl::{epoch, stats, Access as _, AsName as _};
+use crate::helper::get_token;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -1033,7 +1035,7 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
 
 async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let cfg = TomlConfigLoader::try_from(&cli)?;
-    init_logger(&cfg, false)?;
+    //init_logger(&cfg, false)?;
 
     if cli.config_server.is_some() {
         let config_server_url_s = cli.config_server.clone().unwrap();
@@ -1094,11 +1096,16 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
 
     let mut l = launcher::NetworkInstance::new(cfg).set_fetch_node_info(false);
     let _t = ScopedTask::from(handle_event(l.start().unwrap()));
+    let token: &CancellationToken = &get_token();
     tokio::select! {
         e = l.wait() => {
             if let Some(e) = e {
                 eprintln!("launcher error: {}", e);
             }
+        }
+        // 监听取消令牌
+        _ = token.cancelled() => {
+            println!("任务被取消");
         }
         _ = tokio::signal::ctrl_c() => {
             println!("ctrl-c received, exiting...");
@@ -1163,7 +1170,7 @@ pub(crate) async fn main(path: &str) -> ExitCode {
             };
 
             if should_panic {
-                panic!("SCM start an error: {}", e);
+                // panic!("SCM start an error: {}", e);
             }
         }
     };
@@ -1171,6 +1178,17 @@ pub(crate) async fn main(path: &str) -> ExitCode {
     set_prof_active(true);
     let _monitor = std::thread::spawn(memory_monitor);
 
+    let ret_code = run(path).await;
+
+    println!("Stopping easytier...");
+
+    dump_profile(0);
+    set_prof_active(false);
+
+    ExitCode::from(ret_code)
+}
+
+pub(crate) async fn run(path: &str) -> u8 {
     let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
     let mut ret_code = 0;
 
@@ -1179,10 +1197,5 @@ pub(crate) async fn main(path: &str) -> ExitCode {
         ret_code = 1;
     }
 
-    println!("Stopping easytier...");
-
-    dump_profile(0);
-    set_prof_active(false);
-
-    ExitCode::from(ret_code)
+    ret_code
 }

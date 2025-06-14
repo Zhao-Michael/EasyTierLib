@@ -19,11 +19,16 @@ pub mod tunnel;
 pub mod utils;
 pub mod web_client;
 
+mod helper;
 #[cfg(test)]
 mod tests;
 
+use crate::helper::{g_instance, get_token, reset_token};
+use crate::peers::rpc_service::PeerManagerRpcService;
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::thread::sleep;
+use std::time::Duration;
 
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
@@ -38,4 +43,36 @@ pub extern "C" fn run(config_path: *const c_char) {
     // Use a runtime to drive the future if main returns one
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(easytier_core::main(c_str));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn stop() {
+    get_token().cancel()
+}
+
+pub(crate) fn main() {
+    let path = r"C:\Users\chenc\source\repos\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0\config.toml";
+    
+    {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        reset_token();
+        rt.spawn(async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            get_token().cancel();
+        });
+
+        rt.block_on(easytier_core::main(path));
+    }
+
+    loop {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        reset_token();
+        rt.spawn(async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            get_token().cancel();
+        });
+        
+        rt.block_on(easytier_core::run(path));
+    }
 }
