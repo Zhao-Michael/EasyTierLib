@@ -4,7 +4,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
-use crate::helper::{g_instance, init_instance};
+use crate::helper::{g_instance};
 use crate::{
     common::{
         config::{
@@ -136,11 +136,10 @@ impl EasyTierLauncher {
         data: Arc<EasyTierData>,
         fetch_node_info: bool,
     ) -> Result<(), anyhow::Error> {
-        init_instance(cfg);
         let mut tasks = JoinSet::new();
 
         {
-            let guard = g_instance.read().expect("Lock poisoned");
+            let guard = g_instance.read().await;
             let peer_mgr = guard.as_ref().unwrap().get_peer_manager();
 
             // Subscribe to global context events
@@ -210,8 +209,11 @@ impl EasyTierLauncher {
             Self::run_routine_for_android(&instance, &data, &mut tasks).await;
         }
 
-        let mut w_guard = g_instance.write().expect("Lock poisoned");
-        w_guard.as_mut().unwrap().run().await?;
+        {
+            let mut w_guard = g_instance.write().await;
+            w_guard.as_mut().unwrap().run().await?;
+        }
+        
         stop_signal.notified().await;
 
         tasks.abort_all();

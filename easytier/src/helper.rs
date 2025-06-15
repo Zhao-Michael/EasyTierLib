@@ -1,22 +1,19 @@
-use crate::common::config::TomlConfigLoader;
+use crate::easytier_core;
 use crate::instance::instance::Instance;
+use crate::peers::rpc_service::PeerManagerRpcService;
+use crate::proto::cli::PeerInfo;
 use lazy_static::lazy_static;
-use once_cell::sync::Lazy;
 use std::option::Option;
-use std::sync::RwLock;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 lazy_static! {
     pub static ref g_instance: RwLock<Option<Instance>> = RwLock::new(None);
 }
 
-pub fn init_instance(cfg: TomlConfigLoader) {
-    let mut guard = g_instance.write().unwrap();
-    *guard = Some(Instance::new(cfg));
-}
-
 lazy_static! {
-      static ref g_token: RwLock<CancellationToken> = RwLock::new(CancellationToken::new());
+    static ref g_token: std::sync::RwLock<CancellationToken> =
+        std::sync::RwLock::new(CancellationToken::new());
 }
 
 pub fn reset_token() {
@@ -33,4 +30,18 @@ pub fn reset_token() {
 
 pub fn get_token() -> CancellationToken {
     g_token.read().unwrap().clone()
+}
+
+pub(crate) fn run(path: &str) {
+    reset_token();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(easytier_core::run(path));
+}
+
+pub async fn get_stats() -> String {
+    let guard = g_instance.read().await;
+    let pm = guard.as_ref().unwrap();
+    let pmrs = PeerManagerRpcService::new(pm.get_peer_manager());
+    let peers: Vec<PeerInfo> = pmrs.list_peers().await;
+    serde_json::to_string_pretty(&peers).unwrap()
 }

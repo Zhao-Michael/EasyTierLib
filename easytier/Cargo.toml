@@ -14,19 +14,19 @@ readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
- [[bin]]
- name = "easytier"
- path = "src/lib.rs"
- test = false
+# [[bin]]
+# name = "easytier"
+# path = "src/lib.rs"
+# test = false
 
 # [[bin]]
 # name = "easytier-cli"
 # path = "src/easytier-cli.rs"
 
-#[lib]
-#name = "easytier"
-#path = "src/lib.rs"
-#crate-type = ["cdylib"]
+[lib]
+name = "easytier"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
 
 [dependencies]
 lazy_static = "1.4.0"
