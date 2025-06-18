@@ -53,13 +53,13 @@ pub extern "C" fn stop() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn status() -> *mut c_char {
-    let mut result = String::new();
+pub extern "C" fn status() -> usize {
+    let mut result: usize = 0;
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        result = get_stats().await.clone();
+        result = get_stats().await as usize;
     });
-    CString::new(result).unwrap().into_raw()
+    result
 }
 
 #[no_mangle]
@@ -82,7 +82,12 @@ pub(crate) fn main() {
 
     rt.spawn(async {
         tokio::time::sleep(Duration::from_secs(10)).await;
-        get_stats().await;
+        let ptr = get_stats().await as usize;
+        println!("stats ptr: {:?}", ptr);
+        let ptr = get_stats().await as usize;
+        println!("stats ptr: {:?}", ptr);
+        let ptr = get_stats().await as usize;
+        println!("stats ptr: {:?}", ptr);
     });
 
     rt.block_on(easytier_core::run(path));
