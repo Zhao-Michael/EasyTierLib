@@ -2,7 +2,6 @@ name: Rust
 
 on:
   branches: ["main", "dev"]
-  tags: "*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,12 +12,8 @@ defaults:
     shell: bash
 
 jobs:
-  build:
+  release-build:
     runs-on: ubuntu-latest
-    outputs:
-      # do not skip push on branch starts with releases/
-      should_skip: ${{ steps.skip_check.outputs.should_skip == 'true' && !startsWith(github.ref_name, 'releases/') }}
-
     steps:
       - uses: actions/checkout@v4
 
