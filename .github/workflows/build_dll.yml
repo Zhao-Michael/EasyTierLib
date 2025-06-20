@@ -27,7 +27,7 @@ jobs:
       - name: Install cross-compilation tools
         run: |
           sudo apt update
-          apt install tree -y 
+          sudo apt install tree -y 
           sudo apt install -y \
             gcc-aarch64-linux-gnu \
             mingw-w64 \
