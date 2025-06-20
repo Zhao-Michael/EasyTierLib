@@ -33,7 +33,18 @@ jobs:
             mingw-w64 \
             gcc-x86-64-linux-gnu \
             musl-tools
-          
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Docker Buildx
+        run: |
+          sudo apt update
+          sudo apt install -y docker-buildx
+
+      - name: Install Cross
+        run: cargo install cross
+
       - name: Install Rust Targets
         run: |
           rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc
@@ -44,12 +55,15 @@ jobs:
           # GitHub repo token to use to avoid rate limiter
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build
+      - name: Build for Windows (MSVC)
         run: |
           cd easytier
-          cargo build --release --target x86_64-unknown-linux-gnu
-          cargo build --release --target aarch64-unknown-linux-gnu
-          cargo build --release --target x86_64-pc-windows-msvc
+          cross build --target x86_64-pc-windows-msvc --release
+
+      - name: Build for Linux (x86_64 and aarch64)
+        run: |
+          cross build --target x86_64-unknown-linux-gnu --release
+          cross build --target aarch64-unknown-linux-gnu --release
 
       - name: Package Binaries
         run: |
