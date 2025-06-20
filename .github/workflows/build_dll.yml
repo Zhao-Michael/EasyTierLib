@@ -62,16 +62,13 @@ jobs:
       - name: Package Binaries
         run: |
           mkdir -p release_binaries
-          tree
-          cp target/x86_64-unknown-linux-gnu/release/easytier.so release_binaries/easytier-linux-x86_64.so
-          cp target/aarch64-unknown-linux-gnu/release/easytier.so release_binaries/easytier-linux-arm64.so
-          cp target/x86_64-pc-windows-msvc/release/easytier.dll release_binaries/easytier-win-x86_64.dll
+          cp target/x86_64-unknown-linux-gnu/release/libeasytier.so release_binaries/easytier-linux-x86_64.so
+          cp target/aarch64-unknown-linux-gnu/release/libeasytier.so release_binaries/easytier-linux-arm64.so
 
       - name: Create Release and Upload Artifacts
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            release_binaries/easytier-linux-x86_64
-            release_binaries/easytier-linux-arm64
-            release_binaries/easytier-win-x86_64.exe
+            release_binaries/easytier-linux-x86_64.so
+            release_binaries/easytier-linux-arm64.so
