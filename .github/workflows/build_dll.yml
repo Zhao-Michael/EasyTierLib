@@ -47,13 +47,14 @@ jobs:
           # GitHub repo token to use to avoid rate limiter
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build for Windows (MSVC)
-        run: |
-          cd easytier
-          cross build --target x86_64-pc-windows-msvc --release
+      # - name: Build for Windows (MSVC)
+      #   run: |
+      #     cd easytier
+      #     cross build --target x86_64-pc-windows-msvc --release
 
       - name: Build for Linux (x86_64 and aarch64)
         run: |
+          cd easytier
           cross build --target x86_64-unknown-linux-gnu --release
           cross build --target aarch64-unknown-linux-gnu --release
 
