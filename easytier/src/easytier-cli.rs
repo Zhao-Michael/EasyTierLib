@@ -977,7 +977,7 @@ where
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<(), Error> {
-    let cli = Cli::parse();
+    let  cli = Cli::parse();
     let client = RpcClient::new(TcpTunnelConnector::new(
         format!("tcp://{}:{}", cli.rpc_portal.ip(), cli.rpc_portal.port())
             .parse()
