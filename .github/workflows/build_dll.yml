@@ -34,14 +34,6 @@ jobs:
             gcc-x86-64-linux-gnu \
             musl-tools
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Docker Buildx
-        run: |
-          sudo apt update
-          sudo apt install -y docker-buildx
-
       - name: Install Cross
         run: cargo install cross
 
