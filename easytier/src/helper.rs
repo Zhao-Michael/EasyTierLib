@@ -151,6 +151,9 @@ pub async fn get_stats() -> *mut u8 {
     }
 
     let guard = g_instance.read().await;
+    if guard.is_none() {
+        return get_buffer();
+    }
     let inst = guard.as_ref().unwrap();
     let pm = inst.get_peer_manager();
     let routes = pm.list_routes().await;
@@ -163,8 +166,10 @@ pub async fn get_stats() -> *mut u8 {
         .await
         .expect("[]");
     items.push(res.node_info.unwrap().into());
-    for p in peer_routes {
-        items.push(p.into());
+    if !get_token().is_cancelled() {
+        for p in peer_routes {
+            items.push(p.into());
+        }
     }
     let json = print_output(&*items);
     write_json(&*json);
@@ -175,5 +180,5 @@ fn print_output<T>(items: &[T]) -> String
 where
     T: tabled::Tabled + serde::Serialize,
 {
-    serde_json::to_string_pretty(items).unwrap()
+    serde_json::to_string(items).unwrap()
 }
