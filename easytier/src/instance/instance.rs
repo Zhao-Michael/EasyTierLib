@@ -694,6 +694,10 @@ impl Instance {
         self.peer_packet_receiver.clone()
     }
 
+    pub async fn clear_udp_socket(&self) {
+        self.udp_hole_puncher.lock().await.clear_udp_socket().await;
+    }
+
     #[cfg(target_os = "android")]
     pub async fn setup_nic_ctx_for_android(
         nic_ctx: ArcNicCtx,

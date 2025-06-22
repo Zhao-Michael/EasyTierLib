@@ -24,7 +24,7 @@ mod helper;
 mod tests;
 
 use crate::easytier_core::init_instance;
-use crate::helper::{g_instance, get_stats, get_token, run};
+use crate::helper::{clear_udp_socket, get_stats, get_token, run};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::thread::sleep;
@@ -44,12 +44,15 @@ pub extern "C" fn start(config_path: *const c_char) {
     rt.block_on(async {
         init_instance(c_str).await;
     });
-    run(c_str)
+    run(c_str);
+    rt.block_on(async {
+        clear_udp_socket().await;
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn stop() {
-    get_token().cancel()
+    get_token().cancel();
 }
 
 #[unsafe(no_mangle)]
@@ -73,22 +76,29 @@ pub extern "C" fn free_string(p: *mut c_char) {
 }
 
 pub(crate) fn main() {
-    let path = r"config.toml";
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    {
+        let path = r"config.toml";
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.block_on(async {
-        init_instance(path).await;
-    });
+        rt.block_on(async {
+            init_instance(path).await;
+        });
 
-    rt.spawn(async {
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        let ptr = get_stats().await as usize;
-        println!("stats ptr: {:?}", ptr);
-        let ptr = get_stats().await as usize;
-        println!("stats ptr: {:?}", ptr);
-        let ptr = get_stats().await as usize;
-        println!("stats ptr: {:?}", ptr);
-    });
+        rt.spawn(async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            stop();
+            let ptr = get_stats().await as usize;
+            println!("stats ptr: {:?}", ptr);
+            let ptr = get_stats().await as usize;
+            println!("stats ptr: {:?}", ptr);
+            let ptr = get_stats().await as usize;
+            println!("stats ptr: {:?}", ptr);
+        });
 
-    rt.block_on(easytier_core::run(path));
+        rt.block_on(easytier_core::run(path));
+
+        sleep(Duration::from_secs(5));
+    }
+
+    sleep(Duration::from_secs(5));
 }

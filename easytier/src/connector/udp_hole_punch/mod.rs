@@ -68,6 +68,10 @@ impl UdpHolePunchServer {
             both_easy_sym_server,
         })
     }
+
+    pub async fn clear_common(&self) {
+        self.common.clear_udp_socket().await;
+    }
 }
 
 #[async_trait::async_trait]
@@ -500,6 +504,10 @@ impl UdpHolePunchConnector {
     pub async fn run_as_client(&mut self) -> Result<(), Error> {
         self.client.start();
         Ok(())
+    }
+
+    pub async fn clear_udp_socket(&mut self) {
+        self.server.common.clear_udp_socket().await;
     }
 
     pub async fn run_as_server(&mut self) -> Result<(), Error> {
