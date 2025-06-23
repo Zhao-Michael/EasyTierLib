@@ -70,6 +70,12 @@ pub(crate) fn run(path: &str) {
     rt.block_on(easytier_core::run(path));
 }
 
+pub async fn clear_udp_socket() {
+    let guard = g_instance.read().await;
+    let inst = guard.as_ref().unwrap();
+    inst.clear_udp_socket().await;
+}
+
 pub async fn get_stats() -> *mut u8 {
     #[derive(tabled::Tabled, serde::Serialize)]
     struct PeerTableItem {

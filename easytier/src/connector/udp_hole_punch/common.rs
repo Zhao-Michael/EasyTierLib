@@ -477,6 +477,10 @@ impl PunchHoleServerCommon {
         self.listeners.lock().await.push(listener);
     }
 
+    pub(crate) async fn clear_udp_socket(&self) {
+        self.listeners.lock().await.clear();
+    }
+
     pub(crate) async fn find_listener(&self, addr: &SocketAddr) -> Option<Arc<UdpSocket>> {
         let all_listener_sockets = self.listeners.lock().await;
 
