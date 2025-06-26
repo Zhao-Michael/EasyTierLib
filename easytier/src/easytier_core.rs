@@ -8,24 +8,25 @@ use std::{
 };
 
 use anyhow::Context;
-use cidr::IpCidr;
 use clap::Parser;
 
 use crate::{
     common::{
         config::{
-            ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig, LoggingConfigLoader,
-            NetworkIdentity, PeerConfig, PortForwardConfig, TomlConfigLoader, VpnPortalConfig,
+            ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig, NetworkIdentity, PeerConfig,
+            PortForwardConfig, TomlConfigLoader, VpnPortalConfig,
         },
         constants::EASYTIER_VERSION,
-        global_ctx::GlobalCtx,
-        set_default_machine_id,
+        global_ctx::{EventBusSubscriber, GlobalCtx, GlobalCtxEvent},
+        scoped_task::ScopedTask,
         stun::MockStunInfoCollector,
     },
     connector::create_connector_by_url,
-    instance_manager::NetworkInstanceManager,
-    launcher::{add_proxy_network_to_config, ConfigSource},
-    proto::common::{CompressionAlgoPb, NatType},
+    launcher,
+    proto::{
+        self,
+        common::{CompressionAlgoPb, NatType},
+    },
     tunnel::{IpVersion, PROTO_PORT_OFFSET},
     utils::{init_logger, setup_panic_handler},
     web_client,
@@ -43,6 +44,8 @@ static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
 
 #[cfg(feature = "jemalloc")]
 use jemalloc_ctl::{epoch, stats, Access as _, AsName as _};
+use crate::helper::g_instance;
+use crate::instance::instance::Instance;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -98,31 +101,13 @@ struct Cli {
     config_server: Option<String>,
 
     #[arg(
-        long,
-        env = "ET_MACHINE_ID",
-        help = t!("core_clap.machine_id").to_string()
-    )]
-    machine_id: Option<String>,
-
-    #[arg(
         short,
         long,
         env = "ET_CONFIG_FILE",
-        value_delimiter = ',',
-        help = t!("core_clap.config_file").to_string(),
-        num_args = 1..,
+        help = t!("core_clap.config_file").to_string()
     )]
-    config_file: Option<Vec<PathBuf>>,
+    config_file: Option<PathBuf>,
 
-    #[command(flatten)]
-    network_options: NetworkOptions,
-
-    #[command(flatten)]
-    logging_options: LoggingOptions,
-}
-
-#[derive(Parser, Debug)]
-struct NetworkOptions {
     #[arg(
         long,
         env = "ET_NETWORK_NAME",
@@ -191,14 +176,6 @@ struct NetworkOptions {
     rpc_portal: Option<String>,
 
     #[arg(
-        long,
-        env = "ET_RPC_PORTAL_WHITELIST",
-        value_delimiter = ',',
-        help = t!("core_clap.rpc_portal_whitelist").to_string(),
-    )]
-    rpc_portal_whitelist: Option<Vec<IpCidr>>,
-
-    #[arg(
         short,
         long,
         env = "ET_LISTENERS",
@@ -224,6 +201,27 @@ struct NetworkOptions {
         default_value = "false",
     )]
     no_listener: bool,
+
+    #[arg(
+        long,
+        env = "ET_CONSOLE_LOG_LEVEL",
+        help = t!("core_clap.console_log_level").to_string()
+    )]
+    console_log_level: Option<String>,
+
+    #[arg(
+        long,
+        env = "ET_FILE_LOG_LEVEL",
+        help = t!("core_clap.file_log_level").to_string()
+    )]
+    file_log_level: Option<String>,
+
+    #[arg(
+        long,
+        env = "ET_FILE_LOG_DIR",
+        help = t!("core_clap.file_log_dir").to_string()
+    )]
+    file_log_dir: Option<String>,
 
     #[arg(
         long,
@@ -440,24 +438,6 @@ struct NetworkOptions {
 
     #[arg(
         long,
-        env = "ET_ENABLE_QUIC_PROXY",
-        help = t!("core_clap.enable_quic_proxy").to_string(),
-        num_args = 0..=1,
-        default_missing_value = "true"
-    )]
-    enable_quic_proxy: Option<bool>,
-
-    #[arg(
-        long,
-        env = "ET_DISABLE_QUIC_INPUT",
-        help = t!("core_clap.disable_quic_input").to_string(),
-        num_args = 0..=1,
-        default_missing_value = "true"
-    )]
-    disable_quic_input: Option<bool>,
-
-    #[arg(
-        long,
         env = "ET_PORT_FORWARD",
         value_delimiter = ',',
         help = t!("core_clap.port_forward").to_string(),
@@ -478,37 +458,6 @@ struct NetworkOptions {
         help = t!("core_clap.private_mode").to_string(),
     )]
     private_mode: Option<bool>,
-
-    #[arg(
-        long,
-        env = "ET_FOREIGN_RELAY_BPS_LIMIT",
-        help = t!("core_clap.foreign_relay_bps_limit").to_string(),
-    )]
-    foreign_relay_bps_limit: Option<u64>,
-}
-
-#[derive(Parser, Debug)]
-struct LoggingOptions {
-    #[arg(
-        long,
-        env = "ET_CONSOLE_LOG_LEVEL",
-        help = t!("core_clap.console_log_level").to_string()
-    )]
-    console_log_level: Option<String>,
-
-    #[arg(
-        long,
-        env = "ET_FILE_LOG_LEVEL",
-        help = t!("core_clap.file_log_level").to_string()
-    )]
-    file_log_level: Option<String>,
-
-    #[arg(
-        long,
-        env = "ET_FILE_LOG_DIR",
-        help = t!("core_clap.file_log_dir").to_string()
-    )]
-    file_log_dir: Option<String>,
 }
 
 rust_i18n::i18n!("locales", fallback = "en");
@@ -568,47 +517,43 @@ impl Cli {
     }
 }
 
-impl NetworkOptions {
-    fn can_merge(&self, cfg: &TomlConfigLoader, config_file_count: usize) -> bool {
-        if config_file_count == 1 {
-            return true;
-        }
-        let Some(network_name) = &self.network_name else {
-            return false;
-        };
-        if cfg.get_network_identity().network_name == *network_name {
-            return true;
-        }
-        false
-    }
+impl TryFrom<&Cli> for TomlConfigLoader {
+    type Error = anyhow::Error;
 
-    fn merge_into(&self, cfg: &mut TomlConfigLoader) -> anyhow::Result<()> {
-        if self.hostname.is_some() {
-            cfg.set_hostname(self.hostname.clone());
+    fn try_from(cli: &Cli) -> Result<Self, Self::Error> {
+        let cfg = if let Some(config_file) = &cli.config_file {
+            TomlConfigLoader::new(config_file)
+                .with_context(|| format!("failed to load config file: {:?}", cli.config_file))?
+        } else {
+            TomlConfigLoader::default()
+        };
+
+        if cli.hostname.is_some() {
+            cfg.set_hostname(cli.hostname.clone());
         }
 
         let old_ns = cfg.get_network_identity();
-        let network_name = self.network_name.clone().unwrap_or(old_ns.network_name);
-        let network_secret = self
+        let network_name = cli.network_name.clone().unwrap_or(old_ns.network_name);
+        let network_secret = cli
             .network_secret
             .clone()
             .unwrap_or(old_ns.network_secret.unwrap_or_default());
         cfg.set_network_identity(NetworkIdentity::new(network_name, network_secret));
 
-        if let Some(dhcp) = self.dhcp {
+        if let Some(dhcp) = cli.dhcp {
             cfg.set_dhcp(dhcp);
         }
 
-        if let Some(ipv4) = &self.ipv4 {
+        if let Some(ipv4) = &cli.ipv4 {
             cfg.set_ipv4(Some(ipv4.parse().with_context(|| {
                 format!("failed to parse ipv4 address: {}", ipv4)
             })?))
         }
 
-        if !self.peers.is_empty() {
+        if !cli.peers.is_empty() {
             let mut peers = cfg.get_peers();
-            peers.reserve(peers.len() + self.peers.len());
-            for p in &self.peers {
+            peers.reserve(peers.len() + cli.peers.len());
+            for p in &cli.peers {
                 peers.push(PeerConfig {
                     uri: p
                         .parse()
@@ -618,9 +563,9 @@ impl NetworkOptions {
             cfg.set_peers(peers);
         }
 
-        if self.no_listener || !self.listeners.is_empty() {
+        if cli.no_listener || !cli.listeners.is_empty() {
             cfg.set_listeners(
-                Cli::parse_listeners(self.no_listener, self.listeners.clone())?
+                Cli::parse_listeners(cli.no_listener, cli.listeners.clone())?
                     .into_iter()
                     .map(|s| s.parse().unwrap())
                     .collect(),
@@ -634,9 +579,9 @@ impl NetworkOptions {
             );
         }
 
-        if !self.mapped_listeners.is_empty() {
+        if !cli.mapped_listeners.is_empty() {
             cfg.set_mapped_listeners(Some(
-                self.mapped_listeners
+                cli.mapped_listeners
                     .iter()
                     .map(|s| {
                         s.parse()
@@ -653,11 +598,14 @@ impl NetworkOptions {
             ));
         }
 
-        for n in self.proxy_networks.iter() {
-            add_proxy_network_to_config(n, &cfg)?;
+        for n in cli.proxy_networks.iter() {
+            cfg.add_proxy_cidr(
+                n.parse()
+                    .with_context(|| format!("failed to parse proxy network: {}", n))?,
+            );
         }
 
-        let rpc_portal = if let Some(r) = &self.rpc_portal {
+        let rpc_portal = if let Some(r) = &cli.rpc_portal {
             Cli::parse_rpc_portal(r.clone())
                 .with_context(|| format!("failed to parse rpc portal: {}", r))?
         } else if let Some(r) = cfg.get_rpc_portal() {
@@ -667,15 +615,7 @@ impl NetworkOptions {
         };
         cfg.set_rpc_portal(rpc_portal);
 
-        if let Some(rpc_portal_whitelist) = &self.rpc_portal_whitelist {
-            let mut whitelist = cfg.get_rpc_portal_whitelist().unwrap_or_else(|| Vec::new());
-            for cidr in rpc_portal_whitelist {
-                whitelist.push((*cidr).clone());
-            }
-            cfg.set_rpc_portal_whitelist(Some(whitelist));
-        }
-
-        if let Some(external_nodes) = self.external_node.as_ref() {
+        if let Some(external_nodes) = cli.external_node.as_ref() {
             let mut old_peers = cfg.get_peers();
             old_peers.push(PeerConfig {
                 uri: external_nodes.parse().with_context(|| {
@@ -685,11 +625,37 @@ impl NetworkOptions {
             cfg.set_peers(old_peers);
         }
 
-        if let Some(inst_name) = &self.instance_name {
+        if cli.console_log_level.is_some() {
+            cfg.set_console_logger_config(ConsoleLoggerConfig {
+                level: cli.console_log_level.clone(),
+            });
+        }
+
+        if let Some(inst_name) = &cli.instance_name {
             cfg.set_inst_name(inst_name.clone());
         }
 
-        if let Some(vpn_portal) = self.vpn_portal.as_ref() {
+        if cli.file_log_dir.is_some() || cli.file_log_level.is_some() {
+            let inst_name = cfg.get_inst_name();
+            let old_fl = cfg.get_file_logger_config();
+            let file_log_dir = if cli.file_log_dir.is_some() {
+                &cli.file_log_dir
+            } else {
+                &old_fl.dir
+            };
+            let file_log_level = if cli.file_log_level.is_some() {
+                &cli.file_log_level
+            } else {
+                &old_fl.level
+            };
+            cfg.set_file_logger_config(FileLoggerConfig {
+                level: file_log_level.clone(),
+                dir: file_log_dir.clone(),
+                file: Some(format!("easytier-{}", inst_name)),
+            });
+        }
+
+        if let Some(vpn_portal) = cli.vpn_portal.as_ref() {
             let url: url::Url = vpn_portal
                 .parse()
                 .with_context(|| format!("failed to parse vpn portal url: {}", vpn_portal))?;
@@ -709,7 +675,7 @@ impl NetworkOptions {
             });
         }
 
-        if let Some(manual_routes) = self.manual_routes.as_ref() {
+        if let Some(manual_routes) = cli.manual_routes.as_ref() {
             let mut routes = Vec::<cidr::Ipv4Cidr>::with_capacity(manual_routes.len());
             for r in manual_routes {
                 routes.push(
@@ -721,7 +687,7 @@ impl NetworkOptions {
         }
 
         #[cfg(feature = "socks5")]
-        if let Some(socks5_proxy) = self.socks5 {
+        if let Some(socks5_proxy) = cli.socks5 {
             cfg.set_socks5_portal(Some(
                 format!("socks5://0.0.0.0:{}", socks5_proxy)
                     .parse()
@@ -730,7 +696,7 @@ impl NetworkOptions {
         }
 
         #[cfg(feature = "socks5")]
-        for port_forward in self.port_forward.iter() {
+        for port_forward in cli.port_forward.iter() {
             let example_str = ", example: udp://0.0.0.0:12345/10.126.126.1:12345";
 
             let bind_addr = format!(
@@ -764,38 +730,38 @@ impl NetworkOptions {
         }
 
         let mut f = cfg.get_flags();
-        if let Some(default_protocol) = &self.default_protocol {
+        if let Some(default_protocol) = &cli.default_protocol {
             f.default_protocol = default_protocol.clone()
         };
-        if let Some(v) = self.disable_encryption {
+        if let Some(v) = cli.disable_encryption {
             f.enable_encryption = !v;
         }
-        if let Some(v) = self.disable_ipv6 {
+        if let Some(v) = cli.disable_ipv6 {
             f.enable_ipv6 = !v;
         }
-        f.latency_first = self.latency_first.unwrap_or(f.latency_first);
-        if let Some(dev_name) = &self.dev_name {
+        f.latency_first = cli.latency_first.unwrap_or(f.latency_first);
+        if let Some(dev_name) = &cli.dev_name {
             f.dev_name = dev_name.clone()
         }
-        if let Some(mtu) = self.mtu {
+        if let Some(mtu) = cli.mtu {
             f.mtu = mtu as u32;
         }
-        f.enable_exit_node = self.enable_exit_node.unwrap_or(f.enable_exit_node);
-        f.proxy_forward_by_system = self
+        f.enable_exit_node = cli.enable_exit_node.unwrap_or(f.enable_exit_node);
+        f.proxy_forward_by_system = cli
             .proxy_forward_by_system
             .unwrap_or(f.proxy_forward_by_system);
-        f.no_tun = self.no_tun.unwrap_or(f.no_tun) || cfg!(not(feature = "tun"));
-        f.use_smoltcp = self.use_smoltcp.unwrap_or(f.use_smoltcp);
-        if let Some(wl) = self.relay_network_whitelist.as_ref() {
+        f.no_tun = cli.no_tun.unwrap_or(f.no_tun) || cfg!(not(feature = "tun"));
+        f.use_smoltcp = cli.use_smoltcp.unwrap_or(f.use_smoltcp);
+        if let Some(wl) = cli.relay_network_whitelist.as_ref() {
             f.relay_network_whitelist = wl.join(" ");
         }
-        f.disable_p2p = self.disable_p2p.unwrap_or(f.disable_p2p);
-        f.disable_udp_hole_punching = self
+        f.disable_p2p = cli.disable_p2p.unwrap_or(f.disable_p2p);
+        f.disable_udp_hole_punching = cli
             .disable_udp_hole_punching
             .unwrap_or(f.disable_udp_hole_punching);
-        f.relay_all_peer_rpc = self.relay_all_peer_rpc.unwrap_or(f.relay_all_peer_rpc);
-        f.multi_thread = self.multi_thread.unwrap_or(f.multi_thread);
-        if let Some(compression) = &self.compression {
+        f.relay_all_peer_rpc = cli.relay_all_peer_rpc.unwrap_or(f.relay_all_peer_rpc);
+        f.multi_thread = cli.multi_thread.unwrap_or(f.multi_thread);
+        if let Some(compression) = &cli.compression {
             f.data_compress_algo = match compression.as_str() {
                 "none" => CompressionAlgoPb::None,
                 "zstd" => CompressionAlgoPb::Zstd,
@@ -806,40 +772,154 @@ impl NetworkOptions {
             }
             .into();
         }
-        f.bind_device = self.bind_device.unwrap_or(f.bind_device);
-        f.enable_kcp_proxy = self.enable_kcp_proxy.unwrap_or(f.enable_kcp_proxy);
-        f.disable_kcp_input = self.disable_kcp_input.unwrap_or(f.disable_kcp_input);
-        f.enable_quic_proxy = self.enable_quic_proxy.unwrap_or(f.enable_quic_proxy);
-        f.disable_quic_input = self.disable_quic_input.unwrap_or(f.disable_quic_input);
-        f.accept_dns = self.accept_dns.unwrap_or(f.accept_dns);
-        f.private_mode = self.private_mode.unwrap_or(f.private_mode);
-        f.foreign_relay_bps_limit = self
-            .foreign_relay_bps_limit
-            .unwrap_or(f.foreign_relay_bps_limit);
+        f.bind_device = cli.bind_device.unwrap_or(f.bind_device);
+        f.enable_kcp_proxy = cli.enable_kcp_proxy.unwrap_or(f.enable_kcp_proxy);
+        f.disable_kcp_input = cli.disable_kcp_input.unwrap_or(f.disable_kcp_input);
+        f.accept_dns = cli.accept_dns.unwrap_or(f.accept_dns);
+        f.private_mode = cli.private_mode.unwrap_or(f.private_mode);
         cfg.set_flags(f);
 
-        if !self.exit_nodes.is_empty() {
-            cfg.set_exit_nodes(self.exit_nodes.clone());
+        if !cli.exit_nodes.is_empty() {
+            cfg.set_exit_nodes(cli.exit_nodes.clone());
         }
 
-        Ok(())
+        Ok(cfg)
     }
 }
 
-impl LoggingConfigLoader for &LoggingOptions {
-    fn get_console_logger_config(&self) -> ConsoleLoggerConfig {
-        ConsoleLoggerConfig {
-            level: self.console_log_level.clone(),
-        }
-    }
+fn print_event(msg: String) {
+    println!(
+        "{}: {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        msg
+    );
+}
 
-    fn get_file_logger_config(&self) -> FileLoggerConfig {
-        FileLoggerConfig {
-            level: self.file_log_level.clone(),
-            dir: self.file_log_dir.clone(),
-            file: None,
+fn peer_conn_info_to_string(p: proto::cli::PeerConnInfo) -> String {
+    format!(
+        "my_peer_id: {}, dst_peer_id: {}, tunnel_info: {:?}",
+        p.my_peer_id, p.peer_id, p.tunnel
+    )
+}
+
+#[tracing::instrument]
+pub fn handle_event(mut events: EventBusSubscriber) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if let Ok(e) = events.recv().await {
+                match e {
+                    GlobalCtxEvent::PeerAdded(p) => {
+                        print_event(format!("new peer added. peer_id: {}", p));
+                    }
+
+                    GlobalCtxEvent::PeerRemoved(p) => {
+                        print_event(format!("peer removed. peer_id: {}", p));
+                    }
+
+                    GlobalCtxEvent::PeerConnAdded(p) => {
+                        print_event(format!(
+                            "new peer connection added. conn_info: {}",
+                            peer_conn_info_to_string(p)
+                        ));
+                    }
+
+                    GlobalCtxEvent::PeerConnRemoved(p) => {
+                        print_event(format!(
+                            "peer connection removed. conn_info: {}",
+                            peer_conn_info_to_string(p)
+                        ));
+                    }
+
+                    GlobalCtxEvent::ListenerAddFailed(p, msg) => {
+                        print_event(format!(
+                            "listener add failed. listener: {}, msg: {}",
+                            p, msg
+                        ));
+                    }
+
+                    GlobalCtxEvent::ListenerAcceptFailed(p, msg) => {
+                        print_event(format!(
+                            "listener accept failed. listener: {}, msg: {}",
+                            p, msg
+                        ));
+                    }
+
+                    GlobalCtxEvent::ListenerAdded(p) => {
+                        if p.scheme() == "ring" {
+                            continue;
+                        }
+                        print_event(format!("new listener added. listener: {}", p));
+                    }
+
+                    GlobalCtxEvent::ConnectionAccepted(local, remote) => {
+                        print_event(format!(
+                            "new connection accepted. local: {}, remote: {}",
+                            local, remote
+                        ));
+                    }
+
+                    GlobalCtxEvent::ConnectionError(local, remote, err) => {
+                        print_event(format!(
+                            "connection error. local: {}, remote: {}, err: {}",
+                            local, remote, err
+                        ));
+                    }
+
+                    GlobalCtxEvent::TunDeviceReady(dev) => {
+                        print_event(format!("tun device ready. dev: {}", dev));
+                    }
+
+                    GlobalCtxEvent::TunDeviceError(err) => {
+                        print_event(format!("tun device error. err: {}", err));
+                    }
+
+                    GlobalCtxEvent::Connecting(dst) => {
+                        print_event(format!("connecting to peer. dst: {}", dst));
+                    }
+
+                    GlobalCtxEvent::ConnectError(dst, ip_version, err) => {
+                        print_event(format!(
+                            "connect to peer error. dst: {}, ip_version: {}, err: {}",
+                            dst, ip_version, err
+                        ));
+                    }
+
+                    GlobalCtxEvent::VpnPortalClientConnected(portal, client_addr) => {
+                        print_event(format!(
+                            "vpn portal client connected. portal: {}, client_addr: {}",
+                            portal, client_addr
+                        ));
+                    }
+
+                    GlobalCtxEvent::VpnPortalClientDisconnected(portal, client_addr) => {
+                        print_event(format!(
+                            "vpn portal client disconnected. portal: {}, client_addr: {}",
+                            portal, client_addr
+                        ));
+                    }
+
+                    GlobalCtxEvent::DhcpIpv4Changed(old, new) => {
+                        print_event(format!("dhcp ip changed. old: {:?}, new: {:?}", old, new));
+                    }
+
+                    GlobalCtxEvent::DhcpIpv4Conflicted(ip) => {
+                        print_event(format!("dhcp ip conflict. ip: {:?}", ip));
+                    }
+
+                    GlobalCtxEvent::PortForwardAdded(cfg) => {
+                        print_event(format!(
+                            "port forward added. local: {}, remote: {}, proto: {}",
+                            cfg.bind_addr.unwrap().to_string(),
+                            cfg.dst_addr.unwrap().to_string(),
+                            cfg.socket_type().as_str_name()
+                        ));
+                    }
+                }
+            } else {
+                events = events.resubscribe();
+            }
         }
-    }
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -954,10 +1034,10 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
 }
 
 async fn run_main(cli: Cli) -> anyhow::Result<()> {
-    init_logger(&cli.logging_options, false)?;
+    let cfg = TomlConfigLoader::try_from(&cli)?;
+    //init_logger(&cfg, false)?;
 
     if cli.config_server.is_some() {
-        set_default_machine_id(cli.machine_id);
         let config_server_url_s = cli.config_server.clone().unwrap();
         let config_server_url = match url::Url::parse(&config_server_url_s) {
             Ok(u) => u,
@@ -996,7 +1076,7 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
         let mut flags = global_ctx.get_flags();
         flags.bind_device = false;
         global_ctx.set_flags(flags);
-        let hostname = match cli.network_options.hostname {
+        let hostname = match cli.hostname {
             None => gethostname::gethostname().to_string_lossy().to_string(),
             Some(hostname) => hostname.to_string(),
         };
@@ -1008,47 +1088,24 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
         tokio::signal::ctrl_c().await.unwrap();
         return Ok(());
     }
-    let manager = NetworkInstanceManager::new();
-    let mut crate_cli_network =
-        cli.config_file.is_none() || cli.network_options.network_name.is_some();
-    if let Some(config_files) = cli.config_file {
-        let config_file_count = config_files.len();
-        for config_file in config_files {
-            let mut cfg = TomlConfigLoader::new(&config_file)
-                .with_context(|| format!("failed to load config file: {:?}", config_file))?;
 
-            if cli.network_options.can_merge(&cfg, config_file_count) {
-                cli.network_options.merge_into(&mut cfg).with_context(|| {
-                    format!("failed to merge config from cli: {:?}", config_file)
-                })?;
-                crate_cli_network = false;
-            }
+    println!("Starting easytier with config:");
+    println!("############### TOML ###############\n");
+    println!("{}", cfg.dump());
+    println!("-----------------------------------");
 
-            println!(
-                "Starting easytier from config file {:?} with config:",
-                config_file
-            );
-            println!("############### TOML ###############\n");
-            println!("{}", cfg.dump());
-            println!("-----------------------------------");
-            manager.run_network_instance(cfg, ConfigSource::File)?;
-        }
-    }
-
-    if crate_cli_network {
-        let mut cfg = TomlConfigLoader::default();
-        cli.network_options
-            .merge_into(&mut cfg)
-            .with_context(|| format!("failed to create config from cli"))?;
-        println!("Starting easytier from cli with config:");
-        println!("############### TOML ###############\n");
-        println!("{}", cfg.dump());
-        println!("-----------------------------------");
-        manager.run_network_instance(cfg, ConfigSource::Cli)?;
-    }
-
+    let mut l = launcher::NetworkInstance::new(cfg).set_fetch_node_info(false);
+    let _t = ScopedTask::from(handle_event(l.start().unwrap()));
+    let token = &crate::helper::get_token();
     tokio::select! {
-        _ = manager.wait() => {
+        e = l.wait() => {
+            if let Some(e) = e {
+                eprintln!("launcher error: {}", e);
+            }
+        }
+        // 监听取消令牌
+        _ = token.cancelled() => {
+            println!("任务被取消");
         }
         _ = tokio::signal::ctrl_c() => {
             println!("ctrl-c received, exiting...");
@@ -1136,4 +1193,22 @@ pub(crate) async fn main() -> ExitCode {
     set_prof_active(false);
 
     ExitCode::from(ret_code)
+}
+
+pub(crate) async fn run(path: &str) -> u8 {
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let mut ret_code = 0;
+    if let Err(e) = run_main(cli).await {
+        eprintln!("error: {:?}", e);
+        ret_code = 1;
+    }
+
+    ret_code
+}
+
+pub async fn init_instance(path: &str) {
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let cfg = TomlConfigLoader::try_from(&cli).unwrap();
+    let mut guard = g_instance.write().await;
+    *guard = Some(Instance::new(cfg));
 }

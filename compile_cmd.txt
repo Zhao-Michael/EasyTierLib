@@ -1,0 +1,16 @@
+# 编译
+
+cargo build --release --target x86_64-pc-windows-msvc        compile in win32
+
+
+use github pipeline:
+
+cargo build --release --target x86_64-unknown-linux-gnu      compile in wsl
+cargo build --release --target aarch64-unknown-linux-gnu     compile in wsl
+
+
+# 发布版本
+
+git tag 0.0.1
+
+git push origin 0.0.1
