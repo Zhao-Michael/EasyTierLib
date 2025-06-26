@@ -2004,6 +2004,7 @@ dependencies = [
  "petgraph 0.8.1",
  "pin-project-lite",
  "pnet",
+ "proc-macro2",
  "prost",
  "prost-build",
  "prost-reflect",
