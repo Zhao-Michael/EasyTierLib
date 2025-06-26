@@ -66,8 +66,7 @@ pub extern "C" fn status() -> usize {
     result
 }
 
-#[no_mangle]
-pub extern "C" fn free_string(p: *mut c_char) {
+fn free_string(p: *mut c_char) {
     unsafe {
         if p.is_null() {
             return;
@@ -86,7 +85,7 @@ pub(crate) fn main() {
         });
 
         rt.spawn(async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
             stop();
             let ptr = get_stats().await as usize;
             println!("stats ptr: {:?}", ptr);
