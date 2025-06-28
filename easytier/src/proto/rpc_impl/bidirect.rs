@@ -139,7 +139,7 @@ impl BidirectRpcManager {
                     server_tx.send(o).await.unwrap();
                     continue;
                 } else if peer_manager_header.packet_type == PacketType::RpcResp as u8 {
-                    client_tx.send(o).await.unwrap();
+                    let _ = client_tx.send(o).await;
                     continue;
                 }
             }

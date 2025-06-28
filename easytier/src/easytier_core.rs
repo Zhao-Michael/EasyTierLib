@@ -954,7 +954,7 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
 }
 
 async fn run_main(cli: Cli) -> anyhow::Result<()> {
-    init_logger(&cli.logging_options, false)?;
+    // init_logger(&cli.logging_options, false)?;
 
     if cli.config_server.is_some() {
         set_default_machine_id(cli.machine_id);
@@ -1144,6 +1144,7 @@ pub(crate) async fn main() -> ExitCode {
     ExitCode::from(ret_code)
 }
 
+// remember to comment code :   init_logger(&cli.logging_options, false)?;   client_tx.send(o).await.unwrap();
 pub(crate) async fn run(path: &str) -> u8 {
     let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
     let mut ret_code = 0;
