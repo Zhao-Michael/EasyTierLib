@@ -10,7 +10,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LIBCLANG_PATH: /usr/lib/llvm-12/lib  # 明确指定 libclang 路径
+  LIBCLANG_PATH: /usr/lib/llvm-12/lib
+  PROTOC: /usr/local/bin/protoc  # 明确指定 protoc 路径
 
 defaults:
   run:
@@ -30,9 +31,10 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             wget \
-            gnupg
+            gnupg \
+            unzip
           
-          # 添加 LLVM 官方仓库 (Ubuntu 20.04 默认的 LLVM 版本较低)
+          # 添加 LLVM 官方仓库
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
           echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-12 main" >> /etc/apt/sources.list
           
@@ -42,6 +44,37 @@ jobs:
             clang-12 \
             libclang-12-dev
 
+      - name: Install Protobuf 3.12
+        run: |
+          # 安装 protoc 3.12.4 (支持 --experimental_allow_proto3_optional)
+          PROTOC_VERSION=3.12.4
+          PROTOC_ZIP=protoc-$PROTOC_VERSION-linux-x86_64.zip
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/$PROTOC_ZIP
+          unzip -o $PROTOC_ZIP -d /usr/local bin/protoc
+          unzip -o $PROTOC_ZIP -d /usr/local 'include/*'
+          rm -f $PROTOC_ZIP
+          chmod +x /usr/local/bin/protoc
+          
+          # 安装 protobuf 编译依赖
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            make \
+            g++
+          
+          # 编译安装 protobuf C++ 库
+          PB_RELEASE=protobuf-$PROTOC_VERSION
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/$PB_RELEASE.tar.gz
+          tar -xzvf $PB_RELEASE.tar.gz
+          cd $PB_RELEASE
+          ./configure --prefix=/usr
+          make -j$(nproc)
+          make install
+          ldconfig
+          cd ..
+          rm -rf $PB_RELEASE*
+
       - name: Install cross-compilation dependencies
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -50,8 +83,7 @@ jobs:
             gcc-x86-64-linux-gnu \
             curl \
             pkg-config \
-            libssl-dev \
-            protobuf-compiler
+            libssl-dev
 
       - name: Install Rust
         run: |
@@ -62,11 +94,13 @@ jobs:
 
       - name: Build for Linux (x86_64 and aarch64)
         env:
-          # 确保 bindgen 能找到正确的 clang 版本
           BINDGEN_EXTRA_CLANG_ARGS: "--sysroot=/usr/aarch64-linux-gnu"
         run: |
           source $HOME/.cargo/env
           cd easytier
+          
+          # 验证 protoc 版本
+          protoc --version
           
           # x86_64 编译
           cargo build --target x86_64-unknown-linux-gnu --release
