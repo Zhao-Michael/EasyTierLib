@@ -131,12 +131,15 @@ impl BidirectRpcManager {
                     }
                 };
 
-                if o.peer_manager_header().unwrap().packet_type == PacketType::RpcReq as u8 {
+                let Some(peer_manager_header) = o.peer_manager_header() else {
+                    tracing::error!("peer manager header not found");
+                    continue;
+                };
+                if peer_manager_header.packet_type == PacketType::RpcReq as u8 {
                     server_tx.send(o).await.unwrap();
                     continue;
-                } else if o.peer_manager_header().unwrap().packet_type == PacketType::RpcResp as u8
-                {
-                    client_tx.send(o).await.unwrap();
+                } else if peer_manager_header.packet_type == PacketType::RpcResp as u8 {
+                    let _ = client_tx.send(o).await;
                     continue;
                 }
             }

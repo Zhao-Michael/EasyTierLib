@@ -13,6 +13,7 @@ mod vpn_portal;
 pub mod common;
 pub mod connector;
 pub mod launcher;
+pub mod instance_manager;
 pub mod peers;
 pub mod proto;
 pub mod tunnel;
@@ -65,8 +66,7 @@ pub extern "C" fn status() -> usize {
     result
 }
 
-#[no_mangle]
-pub extern "C" fn free_string(p: *mut c_char) {
+fn free_string(p: *mut c_char) {
     unsafe {
         if p.is_null() {
             return;
@@ -76,29 +76,21 @@ pub extern "C" fn free_string(p: *mut c_char) {
 }
 
 pub(crate) fn main() {
-    {
-        let path = r"config.toml";
-        let rt = tokio::runtime::Runtime::new().unwrap();
+    loop {
+        {
+            let path = r"config.toml";
+            let rt = tokio::runtime::Runtime::new().unwrap();
 
-        rt.block_on(async {
-            init_instance(path).await;
-        });
+            rt.spawn(async {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                stop();
+                let ptr = get_stats().await as usize;
+                println!("stats ptr: {:?}", ptr);
+            });
 
-        rt.spawn(async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            stop();
-            let ptr = get_stats().await as usize;
-            println!("stats ptr: {:?}", ptr);
-            let ptr = get_stats().await as usize;
-            println!("stats ptr: {:?}", ptr);
-            let ptr = get_stats().await as usize;
-            println!("stats ptr: {:?}", ptr);
-        });
-
-        rt.block_on(easytier_core::run(path));
+            start(CString::new(path).unwrap().as_ptr());
+        }
 
         sleep(Duration::from_secs(5));
     }
-
-    sleep(Duration::from_secs(5));
 }

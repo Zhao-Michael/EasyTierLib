@@ -18,6 +18,7 @@ advanced_settings: Advanced Settings
 basic_settings: Basic Settings
 listener_urls: Listener URLs
 rpc_port: RPC Port
+rpc_portal_whitelists: RPC Whitelist
 config_network: Config Network
 running: Running
 error_msg: Error Message
@@ -51,7 +52,11 @@ dev_name_placeholder: 'Note: When multiple networks use the same TUN interface n
 off_text: Press to disable
 on_text: Press to enable
 show_config: Show Config
+edit_config: Edit Config File
+config_file: Config File
 close: Close
+save: Save
+config_saved: Configuration saved
 my_node_info: My Node Info
 peer_count: Connected
 upload: Upload
@@ -82,6 +87,12 @@ enable_kcp_proxy_help: Convert TCP traffic to KCP traffic to reduce latency and 
 
 disable_kcp_input: Disable KCP Input
 disable_kcp_input_help: Disable inbound KCP traffic, while nodes with KCP proxy enabled continue to connect using TCP.
+
+enable_quic_proxy: Enable QUIC Proxy
+enable_quic_proxy_help: Convert TCP traffic to QUIC traffic to reduce latency and boost transmission speed.
+
+disable_quic_input: Disable QUIC Input
+disable_quic_input_help: Disable inbound QUIC traffic, while nodes with QUIC proxy enabled continue to connect using TCP.
 
 disable_p2p: Disable P2P
 disable_p2p_help: Disable P2P mode; route all traffic through a manually specified relay server.
@@ -192,3 +203,116 @@ event:
   DhcpIpv4Changed: DhcpIpv4Changed
   DhcpIpv4Conflicted: DhcpIpv4Conflicted
   PortForwardAdded: PortForwardAdded
+
+web:
+  login:
+    title: Login
+    username: Username
+    password: Password
+    submit: Login
+    register: Register
+    remember_me: Remember Me
+    api_host: API Host
+    captcha: Captcha
+    back_to_login: Back to Login
+    login: Login
+
+  register:
+    title: Register
+    username: Username
+    password: Password
+    confirm_password: Confirm Password
+    submit: Register
+    login: Back to Login
+  
+  main:
+    dashboard: Dashboard
+    device_list: Device List
+    device_management: Device Management
+    login_page: Login Page
+    settings: Settings
+    logout: Logout
+    language: Language
+    change_password: Change Password
+
+  device:
+    list: Device List
+    management: Device Management
+    add: Add Device
+    delete: Delete Device
+    refresh: Refresh
+    status: Status
+    online: Online
+    offline: Offline
+    last_seen: Last Seen
+    no_devices: No Devices Found
+    sort_by: Sort By
+    sort_direction: Sort Direction
+    show_detailed_view: Show Details
+    hide_detailed_view: Hide Details
+    sort_by_hostname: Hostname
+    sort_by_public_ip: Public IP
+    sort_by_version: Version
+    sort_by_networks: Network Count
+    sort_direction_asc: Currently ascending, click to switch to descending
+    sort_direction_desc: Currently descending, click to switch to ascending
+    hostname: Hostname
+    public_ip: Public IP
+    networks: Network Count
+    last_report: Last Seen
+    version: Version
+    machine_id: Machine ID
+    unknown_location: Unknown Location
+    
+  device_management:
+    edit_network: Edit Network
+    export_config: Export Config
+    delete_network: Delete Network
+    network: Network
+    select_network: Select Network
+    create_network: Create Network
+    cancel_creation: Cancel Creation
+    more_actions: More Actions
+    edit_as_file: Edit as File
+    import_config: Import Config
+    create_new: Create New Network
+    network_status: Network Status
+    network_configuration: Network Configuration
+    loading_network_configuration: Loading Network Configuration
+    no_network_selected: No Network Selected
+    select_existing_network_or_create_new: Select an existing network instance or create a new one to manage network settings
+    disable_network: Disable Network
+
+  network:
+    title: Network
+    create: Create Network
+    delete: Delete Network
+    start: Start Network
+    stop: Stop Network
+    config: Network Config
+    status: Network Status
+    import: Import Config
+    export: Export Config
+
+  common:
+    confirm: Confirm
+    cancel: Cancel
+    save: Save
+    delete: Delete
+    edit: Edit
+    refresh: Refresh
+    loading: Loading...
+    error: Error
+    success: Success
+    warning: Warning
+    info: Info
+
+  settings:
+    title: Settings
+    change_password: Change Password
+    old_password: Old Password
+    new_password: New Password
+    confirm_password: Confirm New Password
+    language: Language
+    theme: Theme
+    logout: Logout 
