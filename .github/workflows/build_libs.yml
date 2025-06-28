@@ -10,6 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  LIBCLANG_PATH: /usr/lib/llvm-12/lib  # 明确指定 libclang 路径
 
 defaults:
   run:
@@ -17,16 +18,32 @@ defaults:
 
 jobs:
   release-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
       options: --privileged
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install LLVM and Clang
         run: |
           apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            wget \
+            gnupg
+          
+          # 添加 LLVM 官方仓库 (Ubuntu 20.04 默认的 LLVM 版本较低)
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+          echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-12 main" >> /etc/apt/sources.list
+          
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            llvm-12 \
+            clang-12 \
+            libclang-12-dev
+
+      - name: Install cross-compilation dependencies
+        run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             build-essential \
             gcc-aarch64-linux-gnu \
@@ -38,16 +55,25 @@ jobs:
 
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
           rustup target add x86_64-unknown-linux-gnu
           rustup target add aarch64-unknown-linux-gnu
 
       - name: Build for Linux (x86_64 and aarch64)
+        env:
+          # 确保 bindgen 能找到正确的 clang 版本
+          BINDGEN_EXTRA_CLANG_ARGS: "--sysroot=/usr/aarch64-linux-gnu"
         run: |
           source $HOME/.cargo/env
           cd easytier
+          
+          # x86_64 编译
           cargo build --target x86_64-unknown-linux-gnu --release
+          
+          # aarch64 交叉编译
+          CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
           cargo build --target aarch64-unknown-linux-gnu --release
 
       - name: Package Binaries
@@ -60,7 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: github.ref_type == 'tag'
         with:
-          make_latest: "tag_name"
+          make_latest: 'tag_name'
           files: |
             release_binaries/easytier-linux-x86_64.so
             release_binaries/easytier-linux-arm64.so
