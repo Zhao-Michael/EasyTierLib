@@ -3,7 +3,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
-use crate::helper::{g_instance};
 use crate::{
     common::{
         config::{
@@ -21,6 +20,7 @@ use crate::{
 use anyhow::Context;
 use chrono::{DateTime, Local};
 use tokio::{sync::broadcast, task::JoinSet};
+use crate::helper::g_peermanager;
 
 pub type MyNodeInfo = crate::proto::web::MyNodeInfo;
 
@@ -137,17 +137,15 @@ impl EasyTierLauncher {
     ) -> Result<(), anyhow::Error> {
         let mut instance = Instance::new(cfg);
         let mut tasks = JoinSet::new();
+        {
+            let mut guard = g_peermanager.write().await;
+            *guard = Some(instance.get_peer_manager());
+        }
 
         {
-            let guard = g_instance.read().await;
-            let peer_mgr = guard.as_ref().unwrap().get_peer_manager();
-
             // Subscribe to global context events
-            let global_ctx = guard.as_ref().unwrap().get_global_ctx();
+            let global_ctx = instance.get_global_ctx();
             let data_c = data.clone();
-            let global_ctx_c = instance.get_global_ctx();
-            let peer_mgr_c = instance.get_peer_manager().clone();
-            let vpn_portal = instance.get_vpn_portal_inst();
             tasks.spawn(async move {
                 let mut receiver = global_ctx.subscribe();
                 loop {
@@ -169,9 +167,9 @@ impl EasyTierLauncher {
             // update my node info
             if fetch_node_info {
                 let data_c = data.clone();
-                let global_ctx_c = guard.as_ref().unwrap().get_global_ctx();
-                let peer_mgr_c = peer_mgr.clone();
-                let vpn_portal = guard.as_ref().unwrap().get_vpn_portal_inst();
+                let global_ctx_c = instance.get_global_ctx();
+                let peer_mgr_c = instance.get_peer_manager().clone();
+                let vpn_portal = instance.get_vpn_portal_inst();
                 tasks.spawn(async move {
                     loop {
                         // Update TUN Device Name
@@ -218,11 +216,18 @@ impl EasyTierLauncher {
         instance.run().await?;
         stop_signal.notified().await;
 
+        {
+            let mut guard = g_peermanager.write().await;
+            *guard = None;
+        }
+
         tasks.abort_all();
         drop(tasks);
 
         instance.clear_resources().await;
         drop(instance);
+
+        println!("[easytier_routine] Instance resource released!");
 
         Ok(())
     }
@@ -362,7 +367,7 @@ pub enum ConfigSource {
 
 pub struct NetworkInstance {
     config: TomlConfigLoader,
-    launcher: Option<EasyTierLauncher>,
+    pub launcher: Option<EasyTierLauncher>,
 
     config_source: ConfigSource,
 }
