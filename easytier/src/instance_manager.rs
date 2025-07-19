@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct NetworkInstanceManager {
-    instance_map: Arc<DashMap<uuid::Uuid, NetworkInstance>>,
+    pub instance_map: Arc<DashMap<uuid::Uuid, NetworkInstance>>,
     instance_stop_tasks: Arc<DashMap<uuid::Uuid, ScopedTask<()>>>,
     stop_check_notifier: Arc<tokio::sync::Notify>,
 }
