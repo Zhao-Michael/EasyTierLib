@@ -1,17 +1,15 @@
 #![allow(dead_code)]
 
 use std::{
-    net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
-    process::ExitCode,
-    sync::Arc,
+    net::{Ipv4Addr, SocketAddr}, path::PathBuf, process::ExitCode, sync::Arc
 };
 
 use anyhow::Context;
 use cidr::IpCidr;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
-use crate::{
+use clap_complete::Shell;
+use easytier::{
     common::{
         config::{
             ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig, LoggingConfigLoader,
@@ -119,6 +117,9 @@ struct Cli {
 
     #[command(flatten)]
     logging_options: LoggingOptions,
+
+    #[clap(long, help = t!("core_clap.generate_completions").to_string())]
+    gen_autocomplete: Option<Shell>,
 }
 
 #[derive(Parser, Debug)]
@@ -144,6 +145,13 @@ struct NetworkOptions {
         help = t!("core_clap.ipv4").to_string()
     )]
     ipv4: Option<String>,
+
+    #[arg(
+        long,
+        env = "ET_IPV6",
+        help = t!("core_clap.ipv6").to_string()
+    )]
+    ipv6: Option<String>,
 
     #[arg(
         short,
@@ -272,6 +280,13 @@ struct NetworkOptions {
         default_missing_value = "true"
     )]
     multi_thread: Option<bool>,
+
+    #[arg(
+        long,
+        env = "ET_MULTI_THREAD_COUNT",
+        help = t!("core_clap.multi_thread_count").to_string(),
+    )]
+    multi_thread_count: Option<u32>,
 
     #[arg(
         long,
@@ -605,6 +620,12 @@ impl NetworkOptions {
             })?))
         }
 
+        if let Some(ipv6) = &self.ipv6 {
+            cfg.set_ipv6(Some(ipv6.parse().with_context(|| {
+                format!("failed to parse ipv6 address: {}", ipv6)
+            })?))
+        }
+
         if !self.peers.is_empty() {
             let mut peers = cfg.get_peers();
             peers.reserve(peers.len() + self.peers.len());
@@ -635,6 +656,7 @@ impl NetworkOptions {
         }
 
         if !self.mapped_listeners.is_empty() {
+            let mut errs = Vec::new();
             cfg.set_mapped_listeners(Some(
                 self.mapped_listeners
                     .iter()
@@ -645,12 +667,21 @@ impl NetworkOptions {
                     })
                     .map(|s: url::Url| {
                         if s.port().is_none() {
-                            panic!("mapped listener port is missing: {}", s);
+                            errs.push(anyhow::anyhow!("mapped listener port is missing: {}", s));
                         }
                         s
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ));
+            if !errs.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    errs.iter()
+                        .map(|x| format!("{}", x))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
         }
 
         for n in self.proxy_networks.iter() {
@@ -777,6 +808,7 @@ impl NetworkOptions {
         if let Some(dev_name) = &self.dev_name {
             f.dev_name = dev_name.clone()
         }
+        println!("mtu: {}, {:?}", f.mtu, self.mtu);
         if let Some(mtu) = self.mtu {
             f.mtu = mtu as u32;
         }
@@ -816,6 +848,7 @@ impl NetworkOptions {
         f.foreign_relay_bps_limit = self
             .foreign_relay_bps_limit
             .unwrap_or(f.foreign_relay_bps_limit);
+        f.multi_thread_count = self.multi_thread_count.unwrap_or(f.multi_thread_count);
         cfg.set_flags(f);
 
         if !self.exit_nodes.is_empty() {
@@ -1123,6 +1156,11 @@ pub(crate) async fn main() -> ExitCode {
     let _monitor = std::thread::spawn(memory_monitor);
 
     let cli = Cli::parse();
+    if let Some(shell) = cli.gen_autocomplete {
+        let mut cmd = Cli::command();
+        easytier::print_completions(shell, &mut cmd, "easytier-core");
+        return ExitCode::SUCCESS;
+    }
     let mut ret_code = 0;
 
     if let Err(e) = run_main(cli).await {

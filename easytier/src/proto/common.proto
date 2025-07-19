@@ -43,6 +43,8 @@ message FlagsInConfig {
 
   // a global relay limit, only work for foreign network
   uint64 foreign_relay_bps_limit = 26;
+
+  uint32 multi_thread_count = 27;
 }
 
 message RpcDescriptor {
@@ -134,6 +136,11 @@ message Ipv6Addr {
 
 message Ipv4Inet {
   Ipv4Addr address = 1;
+  uint32 network_length = 2;
+}
+
+message Ipv6Inet {
+  Ipv6Addr address = 1;
   uint32 network_length = 2;
 }
 

@@ -18,6 +18,9 @@ core_clap:
   config_file:
     en: "path to the config file, NOTE: the options set by cmdline args will override options in config file"
     zh-CN: "配置文件路径，注意：命令行中的配置的选项会覆盖配置文件中的选项"
+  generate_completions:
+    en: "generate shell completions"
+    zh-CN: "生成 shell 补全脚本"
   network_name:
     en: "network name to identify this vpn network"
     zh-CN: "用于标识此VPN网络的网络名称"
@@ -27,6 +30,9 @@ core_clap:
   ipv4:
     en: "ipv4 address of this vpn node, if empty, this node will only forward packets and no TUN device will be created"
     zh-CN: "此VPN节点的IPv4地址，如果为空，则此节点将仅转发数据包，不会创建TUN设备"
+  ipv6:
+    en: "ipv6 address of this vpn node, can be used together with ipv4 for dual-stack operation"
+    zh-CN: "此VPN节点的IPv6地址，可与IPv4一起使用以进行双栈操作"
   dhcp:
     en: "automatically determine and set IP address by Easytier, and the IP address starts from 10.0.0.1 by default. Warning, if there is an IP conflict in the network when using DHCP, the IP will be automatically changed."
     zh-CN: "由Easytier自动确定并设置IP地址，默认从10.0.0.1开始。警告：在使用DHCP时，如果网络中出现IP冲突，IP将自动更改。"
@@ -92,6 +98,9 @@ core_clap:
   multi_thread:
     en: "use multi-thread runtime, default is single-thread"
     zh-CN: "使用多线程运行时，默认为单线程"
+  multi_thread_count:
+    en: "the number of threads to use, default is 2, only effective when multi-thread is enabled, must be greater than 2"
+    zh-CN: "使用的线程数，默认为2，仅在多线程模式下有效。取值必须大于2"
   disable_ipv6:
     en: "do not use ipv6"
     zh-CN: "不使用IPv6"
@@ -178,6 +187,9 @@ core_clap:
   private_mode:
     en: "if true, nodes with different network names or passwords from this network are not allowed to perform handshake or relay through this node."
     zh-CN: "如果为true，则不允许使用了与本网络不相同的网络名称和密码的节点通过本节点进行握手或中转"
+  foreign_relay_bps_limit:
+    en: "the maximum bps limit for foreign network relay, default is no limit. unit: BPS (bytes per second)"
+    zh-CN: "作为共享节点时，限制非本地网络的流量转发速率，默认无限制，单位 BPS （字节每秒）"
 
 core_app:
   panic_backtrace_save:

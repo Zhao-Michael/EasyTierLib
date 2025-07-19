@@ -1,7 +1,7 @@
 use std::{
     fmt::Debug,
-    net::Ipv4Addr,
-    sync::{Arc, Weak},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::{atomic::AtomicBool, Arc, Weak},
     time::{Instant, SystemTime},
 };
 
@@ -143,6 +143,8 @@ pub struct PeerManager {
     exit_nodes: Vec<Ipv4Addr>,
 
     reserved_my_peer_id_map: DashMap<String, PeerId>,
+
+    allow_loopback_tunnel: AtomicBool,
 }
 
 impl Debug for PeerManager {
@@ -271,7 +273,14 @@ impl PeerManager {
             exit_nodes,
 
             reserved_my_peer_id_map: DashMap::new(),
+
+            allow_loopback_tunnel: AtomicBool::new(true),
         }
+    }
+
+    pub fn set_allow_loopback_tunnel(&self, allow_loopback_tunnel: bool) {
+        self.allow_loopback_tunnel
+            .store(allow_loopback_tunnel, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn build_foreign_network_manager_accessor(
@@ -334,6 +343,8 @@ impl PeerManager {
     pub fn has_directly_connected_conn(&self, peer_id: PeerId) -> bool {
         if let Some(peer) = self.peers.get_peer_by_id(peer_id) {
             peer.has_directly_connected_conn()
+        } else if self.foreign_network_client.get_peer_map().has_peer(peer_id) {
+            true
         } else {
             false
         }
@@ -354,6 +365,65 @@ impl PeerManager {
         self.add_client_tunnel(t, true).await
     }
 
+    // avoid loop back to virtual network
+    fn check_remote_addr_not_from_virtual_network(
+        &self,
+        tunnel: &dyn Tunnel,
+    ) -> Result<(), anyhow::Error> {
+        tracing::info!("check remote addr not from virtual network");
+        let Some(tunnel_info) = tunnel.info() else {
+            anyhow::bail!("tunnel info is not set");
+        };
+        let Some(src) = tunnel_info.remote_addr.map(url::Url::from) else {
+            anyhow::bail!("tunnel info remote addr is not set");
+        };
+        if src.scheme() == "ring" {
+            return Ok(());
+        }
+        let src_host = match src.socket_addrs(|| Some(1)) {
+            Ok(addrs) => addrs,
+            Err(_) => {
+                // if the tunnel is not rely on ip address, skip check
+                return Ok(());
+            }
+        };
+        let virtual_ipv4 = self.global_ctx.get_ipv4().map(|ip| ip.network());
+        let virtual_ipv6 = self.global_ctx.get_ipv6().map(|ip| ip.network());
+        tracing::info!(
+            ?virtual_ipv4,
+            ?virtual_ipv6,
+            "check remote addr not from virtual network"
+        );
+        for addr in src_host {
+            // if no-tun is enabled, the src ip of packet in virtual network is converted to loopback address
+            if addr.ip().is_loopback()
+                && !self
+                    .allow_loopback_tunnel
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                anyhow::bail!("tunnel src host is loopback address");
+            }
+
+            match addr {
+                SocketAddr::V4(addr) => {
+                    if let Some(virtual_ipv4) = virtual_ipv4 {
+                        if virtual_ipv4.contains(&addr.ip()) {
+                            anyhow::bail!("tunnel src host is from the virtual network (ignore this error please)");
+                        }
+                    }
+                }
+                SocketAddr::V6(addr) => {
+                    if let Some(virtual_ipv6) = virtual_ipv6 {
+                        if virtual_ipv6.contains(&addr.ip()) {
+                            anyhow::bail!("tunnel src host is from the virtual network (ignore this error please)");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(ret)]
     pub async fn add_tunnel_as_server(
         &self,
@@ -361,6 +431,8 @@ impl PeerManager {
         is_directly_connected: bool,
     ) -> Result<(), Error> {
         tracing::info!("add tunnel as server start");
+        self.check_remote_addr_not_from_virtual_network(&tunnel)?;
+
         let mut conn = PeerConn::new(self.my_peer_id, self.global_ctx.clone(), tunnel);
         conn.do_handshake_as_server_ext(|peer, msg| {
             if msg.network_name
@@ -862,6 +934,50 @@ impl PeerManager {
                 }
             }
         }
+        #[cfg(target_env = "ohos")]
+        {
+            if dst_peers.is_empty() {
+                tracing::info!("no peer id for ipv4: {}, set exit_node for ohos", ipv4_addr);
+                dst_peers.push(self.my_peer_id.clone());
+                is_exit_node = true;
+            }
+        }
+        (dst_peers, is_exit_node)
+    }
+
+    pub async fn get_msg_dst_peer_ipv6(&self, ipv6_addr: &Ipv6Addr) -> (Vec<PeerId>, bool) {
+        let mut is_exit_node = false;
+        let mut dst_peers = vec![];
+        let network_length = self
+            .global_ctx
+            .get_ipv6()
+            .map(|x| x.network_length())
+            .unwrap_or(64);
+        let ipv6_inet = cidr::Ipv6Inet::new(*ipv6_addr, network_length).unwrap();
+        if ipv6_addr.is_multicast() || *ipv6_addr == ipv6_inet.last_address() {
+            dst_peers.extend(
+                self.peers
+                    .list_routes()
+                    .await
+                    .iter()
+                    .map(|x| x.key().clone()),
+            );
+        } else if let Some(peer_id) = self.peers.get_peer_id_by_ipv6(&ipv6_addr).await {
+            dst_peers.push(peer_id);
+        } else {
+            // For IPv6, we'll need to implement exit node support later
+            // For now, just try to find any available peer for routing
+            if dst_peers.is_empty() {
+                dst_peers.extend(
+                    self.peers
+                        .list_routes()
+                        .await
+                        .iter()
+                        .map(|x| x.key().clone()),
+                );
+                is_exit_node = true;
+            }
+        }
 
         (dst_peers, is_exit_node)
     }
@@ -880,11 +996,11 @@ impl PeerManager {
         Ok(())
     }
 
-    pub async fn send_msg_ipv4(&self, mut msg: ZCPacket, ipv4_addr: Ipv4Addr) -> Result<(), Error> {
+    pub async fn send_msg_by_ip(&self, mut msg: ZCPacket, ip_addr: IpAddr) -> Result<(), Error> {
         tracing::trace!(
-            "do send_msg in peer manager, msg: {:?}, ipv4_addr: {}",
+            "do send_msg in peer manager, msg: {:?}, ip_addr: {}",
             msg,
-            ipv4_addr
+            ip_addr
         );
 
         msg.fill_peer_manager_hdr(
@@ -904,10 +1020,13 @@ impl PeerManager {
             .await;
         }
 
-        let (dst_peers, is_exit_node) = self.get_msg_dst_peer(&ipv4_addr).await;
+        let (dst_peers, is_exit_node) = match ip_addr {
+            IpAddr::V4(ipv4_addr) => self.get_msg_dst_peer(&ipv4_addr).await,
+            IpAddr::V6(ipv6_addr) => self.get_msg_dst_peer_ipv6(&ipv6_addr).await,
+        };
 
         if dst_peers.is_empty() {
-            tracing::info!("no peer id for ipv4: {}", ipv4_addr);
+            tracing::info!("no peer id for ip: {}", ip_addr);
             return Ok(());
         }
 
@@ -1081,6 +1200,35 @@ impl PeerManager {
 
         self.peer_rpc_mgr.rpc_server().registry().unregister_all();
     }
+
+    pub async fn close_peer_conn(
+        &self,
+        peer_id: PeerId,
+        conn_id: &PeerConnId,
+    ) -> Result<(), Error> {
+        let ret = self.peers.close_peer_conn(peer_id, conn_id).await;
+        tracing::info!("close_peer_conn in peer map: {:?}", ret);
+        if ret.is_ok() || !matches!(ret.as_ref().unwrap_err(), Error::NotFound) {
+            return ret;
+        }
+
+        let ret = self
+            .foreign_network_client
+            .get_peer_map()
+            .close_peer_conn(peer_id, conn_id)
+            .await;
+        tracing::info!("close_peer_conn in foreign network client: {:?}", ret);
+        if ret.is_ok() || !matches!(ret.as_ref().unwrap_err(), Error::NotFound) {
+            return ret;
+        }
+
+        let ret = self
+            .foreign_network_manager
+            .close_peer_conn(peer_id, conn_id)
+            .await;
+        tracing::info!("close_peer_conn in foreign network manager done: {:?}", ret);
+        ret
+    }
 }
 
 #[cfg(test)]
@@ -1100,7 +1248,10 @@ mod tests {
             peer_manager::RouteAlgoType,
             peer_rpc::tests::register_service,
             route_trait::NextHopPolicy,
-            tests::{connect_peer_manager, wait_route_appear, wait_route_appear_with_cost},
+            tests::{
+                connect_peer_manager, create_mock_peer_manager_with_name, wait_route_appear,
+                wait_route_appear_with_cost,
+            },
         },
         proto::common::{CompressionAlgoPb, NatType, PeerFeatureFlag},
         tunnel::{
@@ -1375,6 +1526,129 @@ mod tests {
             || async {
                 let peers = peer_mgr_a.list_peers().await;
                 peers.is_empty()
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn close_conn_in_peer_map() {
+        let peer_mgr_a = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
+        let peer_mgr_b = create_mock_peer_manager_with_mock_stun(NatType::Unknown).await;
+        connect_peer_manager(peer_mgr_a.clone(), peer_mgr_b.clone()).await;
+        wait_route_appear(peer_mgr_a.clone(), peer_mgr_b.clone())
+            .await
+            .unwrap();
+
+        let conns = peer_mgr_a
+            .get_peer_map()
+            .list_peer_conns(peer_mgr_b.my_peer_id)
+            .await;
+        assert!(conns.is_some());
+        let conn_info = conns.as_ref().unwrap().first().unwrap();
+
+        peer_mgr_a
+            .close_peer_conn(peer_mgr_b.my_peer_id, &conn_info.conn_id.parse().unwrap())
+            .await
+            .unwrap();
+
+        wait_for_condition(
+            || async {
+                let peers = peer_mgr_a.list_peers().await;
+                peers.is_empty()
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+        // a is client, b is server
+    }
+
+    #[tokio::test]
+    async fn close_conn_in_foreign_network_client() {
+        let peer_mgr_server = create_mock_peer_manager_with_name("server".to_string()).await;
+        let peer_mgr_client = create_mock_peer_manager_with_name("client".to_string()).await;
+        connect_peer_manager(peer_mgr_client.clone(), peer_mgr_server.clone()).await;
+        wait_for_condition(
+            || async {
+                peer_mgr_client
+                    .get_foreign_network_client()
+                    .list_public_peers()
+                    .await
+                    .len()
+                    == 1
+            },
+            Duration::from_secs(3),
+        )
+        .await;
+
+        let peer_id = peer_mgr_client
+            .foreign_network_client
+            .list_public_peers()
+            .await[0];
+        let conns = peer_mgr_client
+            .foreign_network_client
+            .get_peer_map()
+            .list_peer_conns(peer_id)
+            .await;
+        assert!(conns.is_some());
+        let conn_info = conns.as_ref().unwrap().first().unwrap();
+        peer_mgr_client
+            .close_peer_conn(peer_id, &conn_info.conn_id.parse().unwrap())
+            .await
+            .unwrap();
+
+        wait_for_condition(
+            || async {
+                peer_mgr_client
+                    .get_foreign_network_client()
+                    .list_public_peers()
+                    .await
+                    .len()
+                    == 0
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn close_conn_in_foreign_network_manager() {
+        let peer_mgr_server = create_mock_peer_manager_with_name("server".to_string()).await;
+        let peer_mgr_client = create_mock_peer_manager_with_name("client".to_string()).await;
+        connect_peer_manager(peer_mgr_client.clone(), peer_mgr_server.clone()).await;
+        wait_for_condition(
+            || async {
+                peer_mgr_client
+                    .get_foreign_network_client()
+                    .list_public_peers()
+                    .await
+                    .len()
+                    == 1
+            },
+            Duration::from_secs(3),
+        )
+        .await;
+
+        let conns = peer_mgr_server
+            .foreign_network_manager
+            .list_foreign_networks()
+            .await;
+        let client_info = conns.foreign_networks["client"].peers[0].clone();
+        let conn_info = client_info.conns[0].clone();
+        peer_mgr_server
+            .close_peer_conn(client_info.peer_id, &conn_info.conn_id.parse().unwrap())
+            .await
+            .unwrap();
+
+        wait_for_condition(
+            || async {
+                peer_mgr_client
+                    .get_foreign_network_client()
+                    .list_public_peers()
+                    .await
+                    .len()
+                    == 0
             },
             Duration::from_secs(10),
         )

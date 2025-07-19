@@ -520,9 +520,11 @@ impl<C: NatDstConnector> TcpProxy<C> {
         #[cfg(feature = "smoltcp")]
         if self.global_ctx.get_flags().use_smoltcp
             || self.global_ctx.no_tun()
-            || cfg!(target_os = "android")
+            || cfg!(any(target_os = "android", target_env = "ohos"))
         {
             // use smoltcp network stack
+
+            use crate::gateway::tokio_smoltcp::BufferSize;
             self.local_port
                 .store(8899, std::sync::atomic::Ordering::Relaxed);
 
@@ -557,7 +559,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
                     let dst = ipv4.get_destination();
                     let packet = ZCPacket::new_with_payload(&data);
-                    if let Err(e) = peer_mgr.send_msg_ipv4(packet, dst).await {
+                    if let Err(e) = peer_mgr.send_msg_by_ip(packet, IpAddr::V4(dst)).await {
                         tracing::error!("send to peer failed in smoltcp sender: {:?}", e);
                     }
                 }
@@ -573,6 +575,11 @@ impl<C: NatDstConnector> TcpProxy<C> {
                         .parse()
                         .unwrap(),
                     vec![format!("{}", self.get_local_ip().unwrap()).parse().unwrap()],
+                    Some(BufferSize {
+                        tcp_rx_size: 1024 * 16,
+                        tcp_tx_size: 1024 * 16,
+                        ..Default::default()
+                    }),
                 ),
             );
             net.set_any_ip(true);
