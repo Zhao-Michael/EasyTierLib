@@ -293,11 +293,10 @@ tokio-socks = "0.5.2"
 
 
 [features]
-default = ["wireguard", "mimalloc", "websocket", "smoltcp", "tun", "socks5", "quic"]
+default = ["wireguard", "websocket", "smoltcp", "tun", "socks5", "quic"]
 full = [
     "websocket",
     "wireguard",
-    "mimalloc",
     "aes-gcm",
     "smoltcp",
     "tun",
