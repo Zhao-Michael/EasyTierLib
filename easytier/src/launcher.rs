@@ -21,6 +21,7 @@ use anyhow::Context;
 use chrono::{DateTime, Local};
 use tokio::{sync::broadcast, task::JoinSet};
 use crate::helper::g_peermanager;
+use crate::proto::cli::PeerManageRpc;
 
 pub type MyNodeInfo = crate::proto::web::MyNodeInfo;
 
@@ -198,9 +199,7 @@ impl EasyTierLauncher {
                         *data_c.my_node_info.write().unwrap() = node_info.clone();
                         *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
                         *data_c.peers.write().unwrap() =
-                            PeerManagerRpcService::new(peer_mgr_c.clone())
-                                .list_peers()
-                                .await;
+                            PeerManagerRpcService::list_peers(&peer_mgr_c).await;
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
                 });

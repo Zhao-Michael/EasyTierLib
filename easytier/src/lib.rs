@@ -4,8 +4,6 @@ use std::io;
 
 use clap::Command;
 use clap_complete::Generator;
-#[macro_use]
-extern crate rust_i18n;
 
 mod arch;
 mod easytier_core;
@@ -37,7 +35,7 @@ use std::time::Duration;
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
 
-pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name: &str) {
+pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name:&str) {
     clap_complete::generate(generator, cmd, bin_name, &mut io::stdout());
 }
 
