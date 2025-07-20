@@ -901,6 +901,8 @@ impl Instance {
         if let Some(rpc_server) = self.rpc_server.take() {
             rpc_server.registry().unregister_all();
         };
+        let mut guard = crate::tunnel::ring::CONNECTION_MAP.lock();
+        guard.await.clear()
     }
 }
 

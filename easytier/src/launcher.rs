@@ -145,41 +145,23 @@ impl EasyTierLauncher {
 
         {
             // Subscribe to global context events
+            let global_ctx = instance.get_global_ctx();
             let data_c = data.clone();
-            let global_ctx_c = instance.get_global_ctx();
-            let peer_mgr_c = instance.get_peer_manager().clone();
-            let vpn_portal = instance.get_vpn_portal_inst();
             tasks.spawn(async move {
-                let mut receiver = global_ctx_c.subscribe();
+                let mut receiver = global_ctx.subscribe();
                 loop {
-                    // Update TUN Device Name
-                    *data_c.tun_dev_name.write().unwrap() =
-                        global_ctx_c.get_flags().dev_name.clone();
-
-                    let node_info = MyNodeInfo {
-                        virtual_ipv4: global_ctx_c.get_ipv4().map(|ip| ip.into()),
-                        hostname: global_ctx_c.get_hostname(),
-                        version: EASYTIER_VERSION.to_string(),
-                        ips: Some(global_ctx_c.get_ip_collector().collect_ip_addrs().await),
-                        stun_info: Some(global_ctx_c.get_stun_info_collector().get_stun_info()),
-                        listeners: global_ctx_c
-                            .get_running_listeners()
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        vpn_portal_cfg: Some(
-                            vpn_portal
-                                .lock()
-                                .await
-                                .dump_client_config(peer_mgr_c.clone())
-                                .await,
-                        ),
-                    };
-                    *data_c.my_node_info.write().unwrap() = node_info.clone();
-                    *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
-                    *data_c.peers.write().unwrap() =
-                        PeerManagerRpcService::list_peers(&peer_mgr_c).await;
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    match receiver.recv().await {
+                        Ok(event) => {
+                            Self::handle_easytier_event(event.clone(), &data_c).await;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            // do nothing currently
+                            receiver = receiver.resubscribe();
+                        }
+                    }
                 }
             });
 

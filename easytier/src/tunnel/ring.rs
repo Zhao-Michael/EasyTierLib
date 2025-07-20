@@ -184,7 +184,7 @@ pub struct Connection {
     server: Arc<RingTunnel>,
 }
 
-pub static CONNECTION_MAP: Lazy<Arc<Mutex<HashMap<uuid::Uuid, UnboundedSender<Arc<Connection>>>>>> =
+pub(crate) static CONNECTION_MAP: Lazy<Arc<Mutex<HashMap<uuid::Uuid, UnboundedSender<Arc<Connection>>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 #[derive(Debug)]
