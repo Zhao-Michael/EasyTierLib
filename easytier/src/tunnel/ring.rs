@@ -179,12 +179,12 @@ impl Debug for RingSink {
     }
 }
 
-struct Connection {
+pub struct Connection {
     client: Arc<RingTunnel>,
     server: Arc<RingTunnel>,
 }
 
-static CONNECTION_MAP: Lazy<Arc<Mutex<HashMap<uuid::Uuid, UnboundedSender<Arc<Connection>>>>>> =
+pub static CONNECTION_MAP: Lazy<Arc<Mutex<HashMap<uuid::Uuid, UnboundedSender<Arc<Connection>>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 #[derive(Debug)]

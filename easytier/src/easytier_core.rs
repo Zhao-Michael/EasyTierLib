@@ -1,37 +1,25 @@
 #![allow(dead_code)]
 
+use rust_i18n::t;
 use std::{
-    net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
-    process::ExitCode,
-    sync::Arc,
+    net::{Ipv4Addr, SocketAddr}, path::PathBuf, process::ExitCode, sync::Arc
 };
 
 use anyhow::Context;
 use cidr::IpCidr;
 use clap::{CommandFactory, Parser};
-use crate::instance_manager::NetworkInstanceManager;
 
-use crate::{
-    common::{
-        config::{
-            ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig, LoggingConfigLoader,
-            NetworkIdentity, PeerConfig, PortForwardConfig, TomlConfigLoader, VpnPortalConfig,
-        },
-        constants::EASYTIER_VERSION,
-        global_ctx::GlobalCtx,
-        set_default_machine_id,
-        stun::MockStunInfoCollector,
-    },
-    connector::create_connector_by_url,
-    launcher::{add_proxy_network_to_config, ConfigSource},
-    print_completions,
-    proto::common::{CompressionAlgoPb, NatType},
-    tunnel::{IpVersion, PROTO_PORT_OFFSET},
-    utils::{init_logger, setup_panic_handler},
-    web_client,
-};
 use clap_complete::Shell;
+use crate::{common::{
+    config::{
+        ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig, LoggingConfigLoader,
+        NetworkIdentity, PeerConfig, PortForwardConfig, TomlConfigLoader, VpnPortalConfig,
+    },
+    constants::EASYTIER_VERSION,
+    global_ctx::GlobalCtx,
+    set_default_machine_id,
+    stun::MockStunInfoCollector,
+}, connector::create_connector_by_url, instance_manager::NetworkInstanceManager, launcher::{add_proxy_network_to_config, ConfigSource}, print_completions, proto::common::{CompressionAlgoPb, NatType}, tunnel::{IpVersion, PROTO_PORT_OFFSET}, utils::{init_logger, setup_panic_handler}, web_client};
 
 #[cfg(target_os = "windows")]
 windows_service::define_windows_service!(ffi_service_main, win_service_main);
@@ -773,8 +761,8 @@ impl NetworkOptions {
                 port_forward.host_str().expect("local bind host is missing"),
                 port_forward.port().expect("local bind port is missing")
             )
-            .parse()
-            .expect(format!("failed to parse local bind addr {}", example_str).as_str());
+                .parse()
+                .expect(format!("failed to parse local bind addr {}", example_str).as_str());
 
             let dst_addr = format!(
                 "{}",
@@ -784,8 +772,8 @@ impl NetworkOptions {
                     .next()
                     .expect(format!("remote destination addr is missing {}", example_str).as_str())
             )
-            .parse()
-            .expect(format!("failed to parse remote destination addr {}", example_str).as_str());
+                .parse()
+                .expect(format!("failed to parse remote destination addr {}", example_str).as_str());
 
             let port_forward_item = PortForwardConfig {
                 bind_addr,
@@ -812,6 +800,7 @@ impl NetworkOptions {
         if let Some(dev_name) = &self.dev_name {
             f.dev_name = dev_name.clone()
         }
+        println!("mtu: {}, {:?}", f.mtu, self.mtu);
         if let Some(mtu) = self.mtu {
             f.mtu = mtu as u32;
         }
@@ -839,7 +828,7 @@ impl NetworkOptions {
                     compression
                 ),
             }
-            .into();
+                .into();
         }
         f.bind_device = self.bind_device.unwrap_or(f.bind_device);
         f.enable_kcp_proxy = self.enable_kcp_proxy.unwrap_or(f.enable_kcp_proxy);
@@ -1001,8 +990,8 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
                 "udp://config-server.easytier.cn:22020/{}",
                 config_server_url_s
             )
-            .parse()
-            .unwrap(),
+                .parse()
+                .unwrap(),
         };
 
         let mut c_url = config_server_url.clone();
@@ -1184,6 +1173,7 @@ pub(crate) async fn main() -> ExitCode {
 
     ExitCode::from(ret_code)
 }
+
 
 // remember to comment code :   init_logger(&cli.logging_options, false)?;
 pub(crate) async fn run(path: &str) -> u8 {
