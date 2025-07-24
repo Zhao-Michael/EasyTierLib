@@ -159,7 +159,7 @@ pub async fn get_stats() -> *mut u8 {
     let peer_mgr_c = guard.as_ref().unwrap().clone();
     let routes = peer_mgr_c.list_routes().await;
     let pmrs = PeerManagerRpcService::new(peer_mgr_c.clone());
-    let peers = PeerManagerRpcService::list_peers(&peer_mgr_c).await;;
+    let peers = PeerManagerRpcService::list_peers(&peer_mgr_c).await;
     let peer_routes = list_peer_route_pair(peers, routes);
     let mut items: Vec<PeerTableItem> = vec![];
     let res = pmrs
