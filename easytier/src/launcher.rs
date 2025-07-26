@@ -242,8 +242,6 @@ impl EasyTierLauncher {
         instance.clear_resources().await;
         drop(instance);
 
-        println!("[easytier_routine] Instance resource released!");
-
         Ok(())
     }
 

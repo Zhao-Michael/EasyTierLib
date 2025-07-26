@@ -26,6 +26,7 @@ pub fn init_logger(
     config: impl LoggingConfigLoader,
     need_reload: bool,
 ) -> Result<Option<NewFilterSender>, anyhow::Error> {
+    return Ok(None);
     let file_config = config.get_file_logger_config();
     let file_level = file_config
         .level
