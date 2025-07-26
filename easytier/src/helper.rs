@@ -1,10 +1,12 @@
-use crate::easytier_core;
+use crate::easytier_core::{run_main, Cli};
+use crate::instance_manager::NetworkInstanceManager;
 use crate::peers::peer_manager::PeerManager;
 use crate::peers::rpc_service::PeerManagerRpcService;
 use crate::proto::cli::{list_peer_route_pair, NodeInfo, PeerManageRpc, ShowNodeInfoRequest};
 use crate::proto::rpc_types::controller::BaseController;
 use crate::utils::{cost_to_str, float_to_str, PeerRoutePair};
 use cidr::Ipv4Inet;
+use clap::Parser;
 use humansize::format_size;
 use lazy_static::lazy_static;
 use std::alloc::{alloc_zeroed, Layout};
@@ -13,11 +15,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use crate::instance_manager::NetworkInstanceManager;
 
 lazy_static! {
     pub static ref g_peermanager: RwLock<Option<Arc<PeerManager>>> = RwLock::new(None);
-    pub static ref g_networkinstance: RwLock<NetworkInstanceManager> = RwLock::new(NetworkInstanceManager::new());
 }
 
 lazy_static! {
@@ -69,7 +69,7 @@ pub fn get_token() -> CancellationToken {
 pub(crate) fn run(path: &str) {
     reset_token();
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(easytier_core::run(path));
+    rt.block_on(start_run(path));
 }
 
 pub async fn get_stats() -> *mut u8 {
@@ -182,4 +182,19 @@ where
     T: tabled::Tabled + serde::Serialize,
 {
     serde_json::to_string(items).unwrap()
+}
+
+// 1. rename easytier-core.rs to easytier_core.rs
+// 2. add codes: let token = &crate::helper::get_token();  _ = token.cancelled() => { println!("任务被取消"); }
+// 3. add codes: return Ok(None);   in  init_logger
+// 4. fix the import/package issue
+async fn start_run(path: &str) -> u8 {
+    let cli = Cli::parse_from(["app", &format!("-c{}", path)]);
+    let mut ret_code = 0;
+    if let Err(e) = run_main(cli).await {
+        eprintln!("error: {:?}", e);
+        ret_code = 1;
+    }
+
+    ret_code
 }
