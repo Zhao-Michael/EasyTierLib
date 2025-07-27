@@ -37,6 +37,9 @@ node_modules
 .vite
 
 easytier-gui/src-tauri/*.dll
+/easytier-contrib/easytier-ohrs/dist/
+
+.direnv
 
 et.db*
 /easytier/config.toml

@@ -3,7 +3,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
-use crate::helper::{g_instance};
 use crate::{
     common::{
         config::{
@@ -21,6 +20,7 @@ use crate::{
 use anyhow::Context;
 use chrono::{DateTime, Local};
 use tokio::{sync::broadcast, task::JoinSet};
+use crate::helper::g_peermanager;
 
 pub type MyNodeInfo = crate::proto::web::MyNodeInfo;
 
@@ -95,7 +95,7 @@ impl EasyTierLauncher {
         }
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
     async fn run_routine_for_android(
         instance: &Instance,
         data: &EasyTierData,
@@ -137,41 +137,56 @@ impl EasyTierLauncher {
     ) -> Result<(), anyhow::Error> {
         let mut instance = Instance::new(cfg);
         let mut tasks = JoinSet::new();
+        {
+            let mut guard = g_peermanager.write().await;
+            *guard = Some(instance.get_peer_manager());
+        }
 
         {
-            let guard = g_instance.read().await;
-            let peer_mgr = guard.as_ref().unwrap().get_peer_manager();
-
             // Subscribe to global context events
-            let global_ctx = guard.as_ref().unwrap().get_global_ctx();
             let data_c = data.clone();
             let global_ctx_c = instance.get_global_ctx();
             let peer_mgr_c = instance.get_peer_manager().clone();
             let vpn_portal = instance.get_vpn_portal_inst();
             tasks.spawn(async move {
-                let mut receiver = global_ctx.subscribe();
                 loop {
-                    match receiver.recv().await {
-                        Ok(event) => {
-                            Self::handle_easytier_event(event.clone(), &data_c).await;
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            break;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            // do nothing currently
-                            receiver = receiver.resubscribe();
-                        }
-                    }
+                    // Update TUN Device Name
+                    *data_c.tun_dev_name.write().unwrap() =
+                        global_ctx_c.get_flags().dev_name.clone();
+
+                    let node_info = MyNodeInfo {
+                        virtual_ipv4: global_ctx_c.get_ipv4().map(|ip| ip.into()),
+                        hostname: global_ctx_c.get_hostname(),
+                        version: EASYTIER_VERSION.to_string(),
+                        ips: Some(global_ctx_c.get_ip_collector().collect_ip_addrs().await),
+                        stun_info: Some(global_ctx_c.get_stun_info_collector().get_stun_info()),
+                        listeners: global_ctx_c
+                            .get_running_listeners()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        vpn_portal_cfg: Some(
+                            vpn_portal
+                                .lock()
+                                .await
+                                .dump_client_config(peer_mgr_c.clone())
+                                .await,
+                        ),
+                    };
+                    *data_c.my_node_info.write().unwrap() = node_info.clone();
+                    *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
+                    *data_c.peers.write().unwrap() =
+                        PeerManagerRpcService::list_peers(&peer_mgr_c).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             });
 
             // update my node info
             if fetch_node_info {
                 let data_c = data.clone();
-                let global_ctx_c = guard.as_ref().unwrap().get_global_ctx();
-                let peer_mgr_c = peer_mgr.clone();
-                let vpn_portal = guard.as_ref().unwrap().get_vpn_portal_inst();
+                let global_ctx_c = instance.get_global_ctx();
+                let peer_mgr_c = instance.get_peer_manager().clone();
+                let vpn_portal = instance.get_vpn_portal_inst();
                 tasks.spawn(async move {
                     loop {
                         // Update TUN Device Name
@@ -200,9 +215,7 @@ impl EasyTierLauncher {
                         *data_c.my_node_info.write().unwrap() = node_info.clone();
                         *data_c.routes.write().unwrap() = peer_mgr_c.list_routes().await;
                         *data_c.peers.write().unwrap() =
-                            PeerManagerRpcService::new(peer_mgr_c.clone())
-                                .list_peers()
-                                .await;
+                            PeerManagerRpcService::list_peers(&peer_mgr_c).await;
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
                 });
@@ -212,12 +225,16 @@ impl EasyTierLauncher {
             Self::run_routine_for_android(&instance, &data, &mut tasks).await;
         }
 
-        {
-            let mut w_guard = g_instance.write().await;
-            w_guard.as_mut().unwrap().run().await?;
-        }
-        
+        #[cfg(any(target_os = "android", target_env = "ohos"))]
+        Self::run_routine_for_android(&instance, &data, &mut tasks).await;
+
+        instance.run().await?;
         stop_signal.notified().await;
+
+        {
+            let mut guard = g_peermanager.write().await;
+            *guard = None;
+        }
 
         tasks.abort_all();
         drop(tasks);
@@ -270,8 +287,9 @@ impl EasyTierLauncher {
 
         self.thread_handle = Some(std::thread::spawn(move || {
             let rt = if cfg.get_flags().multi_thread {
+                let worker_threads = 2.max(cfg.get_flags().multi_thread_count as usize);
                 tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
+                    .worker_threads(worker_threads)
                     .enable_all()
                     .build()
             } else {
@@ -362,7 +380,7 @@ pub enum ConfigSource {
 
 pub struct NetworkInstance {
     config: TomlConfigLoader,
-    launcher: Option<EasyTierLauncher>,
+    pub launcher: Option<EasyTierLauncher>,
 
     config_source: ConfigSource,
 }
@@ -496,7 +514,7 @@ pub fn add_proxy_network_to_config(
     } else {
         None
     };
-    cfg.add_proxy_cidr(real_cidr, mapped_cidr);
+    cfg.add_proxy_cidr(real_cidr, mapped_cidr)?;
     Ok(())
 }
 
@@ -691,6 +709,10 @@ impl NetworkConfig {
             flags.use_smoltcp = use_smoltcp;
         }
 
+        if let Some(disable_ipv6) = self.disable_ipv6 {
+            flags.enable_ipv6 = !disable_ipv6;
+        }
+
         if let Some(enable_kcp_proxy) = self.enable_kcp_proxy {
             flags.enable_kcp_proxy = enable_kcp_proxy;
         }
@@ -866,6 +888,7 @@ impl NetworkConfig {
         result.latency_first = Some(flags.latency_first);
         result.dev_name = Some(flags.dev_name.clone());
         result.use_smoltcp = Some(flags.use_smoltcp);
+        result.disable_ipv6 = Some(!flags.enable_ipv6);
         result.enable_kcp_proxy = Some(flags.enable_kcp_proxy);
         result.disable_kcp_input = Some(flags.disable_kcp_input);
         result.enable_quic_proxy = Some(flags.enable_quic_proxy);
@@ -1016,7 +1039,7 @@ mod tests {
                     } else {
                         None
                     };
-                    config.add_proxy_cidr(network, mapped_network);
+                    config.add_proxy_cidr(network, mapped_network).unwrap();
                 }
             }
 
@@ -1109,6 +1132,7 @@ mod tests {
                 flags.latency_first = rng.gen_bool(0.5);
                 flags.dev_name = format!("etun{}", rng.gen_range(0..10));
                 flags.use_smoltcp = rng.gen_bool(0.3);
+                flags.enable_ipv6 = rng.gen_bool(0.8);
                 flags.enable_kcp_proxy = rng.gen_bool(0.5);
                 flags.disable_kcp_input = rng.gen_bool(0.3);
                 flags.enable_quic_proxy = rng.gen_bool(0.5);

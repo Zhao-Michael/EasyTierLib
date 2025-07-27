@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     io,
-    net::Ipv4Addr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     pin::Pin,
     sync::{Arc, Weak},
     task::{Context, Poll},
@@ -23,9 +23,10 @@ use crate::{
 
 use byteorder::WriteBytesExt as _;
 use bytes::{BufMut, BytesMut};
+use cidr::{Ipv4Inet, Ipv6Inet};
 use futures::{lock::BiLock, ready, SinkExt, Stream, StreamExt};
 use pin_project_lite::pin_project;
-use pnet::packet::ipv4::Ipv4Packet;
+use pnet::packet::{ipv4::Ipv4Packet, ipv6::Ipv6Packet};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::Mutex,
@@ -110,7 +111,7 @@ enum PacketProtocol {
 
 // Note: the protocol in the packet information header is platform dependent.
 impl PacketProtocol {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_env = "ohos"))]
     fn into_pi_field(self) -> Result<u16, io::Error> {
         use nix::libc;
         match self {
@@ -247,6 +248,23 @@ pub struct VirtualNic {
     ifcfg: Box<dyn IfConfiguerTrait + Send + Sync + 'static>,
 }
 
+impl Drop for VirtualNic {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(ref ifname) = self.ifname {
+                // Try to clean up firewall rules, but don't panic in destructor
+                if let Err(e) = crate::arch::windows::remove_interface_firewall_rules(ifname) {
+                    eprintln!(
+                        "Warning: Failed to remove firewall rules for interface {}: {}",
+                        ifname, e
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl VirtualNic {
     pub fn new(global_ctx: ArcGlobalCtx) -> Self {
         Self {
@@ -256,12 +274,113 @@ impl VirtualNic {
         }
     }
 
+    /// Check and create TUN device node if necessary on Linux systems
+    #[cfg(target_os = "linux")]
+    async fn ensure_tun_device_node() {
+        const TUN_DEV_PATH: &str = "/dev/net/tun";
+        const TUN_DIR_PATH: &str = "/dev/net";
+
+        // Check if /dev/net/tun already exists
+        if tokio::fs::metadata(TUN_DEV_PATH).await.is_ok() {
+            tracing::debug!("TUN device node {} already exists", TUN_DEV_PATH);
+            return;
+        }
+
+        tracing::info!(
+            "TUN device node {} not found, attempting to create",
+            TUN_DEV_PATH
+        );
+
+        // Check if TUN kernel module is available
+        let tun_module_available = tokio::fs::metadata("/proc/net/dev").await.is_ok()
+            && (tokio::fs::read_to_string("/proc/modules").await)
+                .map(|content| content.contains("tun"))
+                .unwrap_or(false);
+
+        if !tun_module_available {
+            tracing::warn!("TUN kernel module may not be loaded");
+            println!("⚠ Warning: TUN kernel module may not be available.");
+            println!("  You may need to load it with: sudo modprobe tun");
+        }
+
+        // Try to create /dev/net directory if it doesn't exist
+        if tokio::fs::metadata(TUN_DIR_PATH).await.is_err() {
+            if let Err(e) = tokio::fs::create_dir_all(TUN_DIR_PATH).await {
+                tracing::warn!(
+                    "Failed to create directory {}: {}. Continuing anyway.",
+                    TUN_DIR_PATH,
+                    e
+                );
+                println!(
+                    "⚠ Warning: Failed to create directory {}. TUN device creation may fail.",
+                    TUN_DIR_PATH
+                );
+                println!(
+                    "  You may need to run with root privileges or manually create the TUN device."
+                );
+                Self::print_troubleshooting_info();
+                return;
+            }
+            tracing::info!("Created directory {}", TUN_DIR_PATH);
+        }
+
+        // Try to create the TUN device node
+        // Major number 10, minor number 200 for /dev/net/tun
+        let dev_node = nix::sys::stat::makedev(10, 200);
+
+        match nix::sys::stat::mknod(
+            TUN_DEV_PATH,
+            nix::sys::stat::SFlag::S_IFCHR,
+            nix::sys::stat::Mode::from_bits(0o600).unwrap(),
+            dev_node,
+        ) {
+            Ok(_) => {
+                tracing::info!("Successfully created TUN device node {}", TUN_DEV_PATH);
+                println!("✓ Created TUN device node {}", TUN_DEV_PATH);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to create TUN device node {}: {}. Continuing anyway.",
+                    TUN_DEV_PATH,
+                    e
+                );
+                println!(
+                    "⚠ Warning: Failed to create TUN device node {}.",
+                    TUN_DEV_PATH
+                );
+                println!("  Error: {}", e);
+                Self::print_troubleshooting_info();
+            }
+        }
+    }
+
+    /// Print troubleshooting information for TUN device issues
+    #[cfg(target_os = "linux")]
+    fn print_troubleshooting_info() {
+        println!("  Possible solutions:");
+        println!("  1. Run with root privileges: sudo ./easytier-core [options]");
+        println!("  2. Manually create TUN device: sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200");
+        println!("  3. Load TUN kernel module: sudo modprobe tun");
+        println!("  4. Use --no-tun flag if TUN functionality is not needed");
+        println!("  5. Check if your system/container supports TUN devices");
+        println!("  Note: TUN functionality may still work if the kernel supports dynamic device creation.");
+    }
+
+    /// For non-Linux systems, this is a no-op
+    #[cfg(not(target_os = "linux"))]
+    async fn ensure_tun_device_node() -> Result<(), Error> {
+        Ok(())
+    }
+
     async fn create_tun(&mut self) -> Result<tun::platform::Device, Error> {
         let mut config = Configuration::default();
         config.layer(Layer::L3);
 
         #[cfg(target_os = "linux")]
         {
+            // Check and create TUN device node if necessary (Linux only)
+            Self::ensure_tun_device_node().await;
+
             let dev_name = self.global_ctx.get_flags().dev_name;
             if !dev_name.is_empty() {
                 config.tun_name(format!("{}", dev_name));
@@ -328,7 +447,7 @@ impl VirtualNic {
         Ok(tun::create(&config)?)
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
     pub async fn create_dev_for_android(
         &mut self,
         tun_fd: std::os::fd::RawFd,
@@ -413,6 +532,38 @@ impl VirtualNic {
         );
 
         self.ifname = Some(ifname.to_owned());
+
+        #[cfg(target_os = "windows")]
+        {
+            // Add firewall rules for virtual NIC interface to allow all traffic
+            match crate::arch::windows::add_interface_to_firewall_allowlist(&ifname) {
+                Ok(_) => {
+                    tracing::info!(
+                        "Successfully configured Windows Firewall for interface: {}",
+                        ifname
+                    );
+                    tracing::info!(
+                        "All protocols (TCP/UDP/ICMP) are now allowed on interface: {}",
+                        ifname
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to configure Windows Firewall for {}: {}", ifname, e);
+                    println!(
+                        "⚠ Warning: Failed to configure Windows Firewall for interface {}.",
+                        ifname
+                    );
+                    println!("  This may cause connectivity issues with ping and other network functions.");
+                    println!(
+                        "  Please run as Administrator or manually configure Windows Firewall."
+                    );
+                    println!(
+                        "  Alternatively, you can disable Windows Firewall for testing purposes."
+                    );
+                }
+            }
+        }
+
         Ok(Box::new(ft))
     }
 
@@ -434,9 +585,23 @@ impl VirtualNic {
         Ok(())
     }
 
-    pub async fn remove_ip(&self, ip: Option<Ipv4Addr>) -> Result<(), Error> {
+    pub async fn add_ipv6_route(&self, address: Ipv6Addr, cidr: u8) -> Result<(), Error> {
+        let _g = self.global_ctx.net_ns.guard();
+        self.ifcfg
+            .add_ipv6_route(self.ifname(), address, cidr, None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_ip(&self, ip: Option<Ipv4Inet>) -> Result<(), Error> {
         let _g = self.global_ctx.net_ns.guard();
         self.ifcfg.remove_ip(self.ifname(), ip).await?;
+        Ok(())
+    }
+
+    pub async fn remove_ipv6(&self, ip: Option<Ipv6Inet>) -> Result<(), Error> {
+        let _g = self.global_ctx.net_ns.guard();
+        self.ifcfg.remove_ipv6(self.ifname(), ip).await?;
         Ok(())
     }
 
@@ -444,6 +609,14 @@ impl VirtualNic {
         let _g = self.global_ctx.net_ns.guard();
         self.ifcfg
             .add_ipv4_ip(self.ifname(), ip, cidr as u8)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn add_ipv6(&self, ip: Ipv6Addr, cidr: i32) -> Result<(), Error> {
+        let _g = self.global_ctx.net_ns.guard();
+        self.ifcfg
+            .add_ipv6_ip(self.ifname(), ip, cidr as u8)
             .await?;
         Ok(())
     }
@@ -496,6 +669,20 @@ impl NicCtx {
         Ok(())
     }
 
+    pub async fn assign_ipv6_to_tun_device(&self, ipv6_addr: cidr::Ipv6Inet) -> Result<(), Error> {
+        let nic = self.nic.lock().await;
+        nic.link_up().await?;
+        nic.remove_ipv6(None).await?;
+        nic.add_ipv6(ipv6_addr.address(), ipv6_addr.network_length() as i32)
+            .await?;
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+        {
+            nic.add_ipv6_route(ipv6_addr.first_address(), ipv6_addr.network_length())
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn do_forward_nic_to_peers_ipv4(ret: ZCPacket, mgr: &PeerManager) {
         if let Some(ipv4) = Ipv4Packet::new(ret.payload()) {
             if ipv4.get_version() != 4 {
@@ -509,16 +696,53 @@ impl NicCtx {
             );
 
             // TODO: use zero-copy
-            let send_ret = mgr.send_msg_ipv4(ret, dst_ipv4).await;
+            let send_ret = mgr.send_msg_by_ip(ret, IpAddr::V4(dst_ipv4)).await;
             if send_ret.is_err() {
-                tracing::trace!(?send_ret, "[USER_PACKET] send_msg_ipv4 failed")
+                tracing::trace!(?send_ret, "[USER_PACKET] send_msg failed")
             }
         } else {
             tracing::warn!(?ret, "[USER_PACKET] not ipv4 packet");
         }
     }
 
-    fn do_forward_nic_to_peers(
+    async fn do_forward_nic_to_peers_ipv6(ret: ZCPacket, mgr: &PeerManager) {
+        if let Some(ipv6) = Ipv6Packet::new(ret.payload()) {
+            if ipv6.get_version() != 6 {
+                tracing::info!("[USER_PACKET] not ipv6 packet: {:?}", ipv6);
+                return;
+            }
+            let dst_ipv6 = ipv6.get_destination();
+            tracing::trace!(
+                ?ret,
+                "[USER_PACKET] recv new packet from tun device and forward to peers."
+            );
+
+            // TODO: use zero-copy
+            let send_ret = mgr.send_msg_by_ip(ret, IpAddr::V6(dst_ipv6)).await;
+            if send_ret.is_err() {
+                tracing::trace!(?send_ret, "[USER_PACKET] send_msg failed")
+            }
+        } else {
+            tracing::warn!(?ret, "[USER_PACKET] not ipv6 packet");
+        }
+    }
+
+    async fn do_forward_nic_to_peers(ret: ZCPacket, mgr: &PeerManager) {
+        let payload = ret.payload();
+        if payload.is_empty() {
+            return;
+        }
+
+        match payload[0] >> 4 {
+            4 => Self::do_forward_nic_to_peers_ipv4(ret, mgr).await,
+            6 => Self::do_forward_nic_to_peers_ipv6(ret, mgr).await,
+            _ => {
+                tracing::warn!(?ret, "[USER_PACKET] unknown IP version");
+            }
+        }
+    }
+
+    fn do_forward_nic_to_peers_task(
         &mut self,
         mut stream: Pin<Box<dyn ZCPacketStream>>,
     ) -> Result<(), Error> {
@@ -532,7 +756,7 @@ impl NicCtx {
                     tracing::error!("read from nic failed: {:?}", ret);
                     break;
                 }
-                Self::do_forward_nic_to_peers_ipv4(ret.unwrap(), mgr.as_ref()).await;
+                Self::do_forward_nic_to_peers(ret.unwrap(), mgr.as_ref()).await;
             }
             panic!("nic stream closed");
         });
@@ -647,7 +871,11 @@ impl NicCtx {
         Ok(())
     }
 
-    pub async fn run(&mut self, ipv4_addr: cidr::Ipv4Inet) -> Result<(), Error> {
+    pub async fn run(
+        &mut self,
+        ipv4_addr: Option<cidr::Ipv4Inet>,
+        ipv6_addr: Option<cidr::Ipv6Inet>,
+    ) -> Result<(), Error> {
         let tunnel = {
             let mut nic = self.nic.lock().await;
             match nic.create_dev().await {
@@ -681,16 +909,25 @@ impl NicCtx {
 
         let (stream, sink) = tunnel.split();
 
-        self.do_forward_nic_to_peers(stream)?;
+        self.do_forward_nic_to_peers_task(stream)?;
         self.do_forward_peers_to_nic(sink);
 
-        self.assign_ipv4_to_tun_device(ipv4_addr).await?;
+        // Assign IPv4 address if provided
+        if let Some(ipv4_addr) = ipv4_addr {
+            self.assign_ipv4_to_tun_device(ipv4_addr).await?;
+        }
+
+        // Assign IPv6 address if provided
+        if let Some(ipv6_addr) = ipv6_addr {
+            self.assign_ipv6_to_tun_device(ipv6_addr).await?;
+        }
+
         self.run_proxy_cidrs_route_updater().await?;
 
         Ok(())
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
     pub async fn run_for_android(&mut self, tun_fd: std::os::fd::RawFd) -> Result<(), Error> {
         let tunnel = {
             let mut nic = self.nic.lock().await;
@@ -710,7 +947,7 @@ impl NicCtx {
 
         let (stream, sink) = tunnel.split();
 
-        self.do_forward_nic_to_peers(stream)?;
+        self.do_forward_nic_to_peers_task(stream)?;
         self.do_forward_peers_to_nic(sink);
 
         Ok(())

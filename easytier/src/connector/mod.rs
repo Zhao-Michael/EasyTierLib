@@ -29,7 +29,7 @@ async fn set_bind_addr_for_peer_connector(
     is_ipv4: bool,
     ip_collector: &Arc<IPCollector>,
 ) {
-    if cfg!(target_os = "android") {
+    if cfg!(any(target_os = "android", target_env = "ohos")) {
         return;
     }
 
@@ -147,6 +147,12 @@ pub async fn create_connector_by_url(
             Box::new(connector)
         }
         "txt" | "srv" => {
+            if url.host_str().is_none() {
+                return Err(Error::InvalidUrl(format!(
+                    "host should not be empty in txt or srv url: {}",
+                    url
+                )));
+            }
             let connector = dns_connector::DNSTunnelConnector::new(url, global_ctx.clone());
             Box::new(connector)
         }

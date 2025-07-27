@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "common.proto";
 import "peer_rpc.proto";
+import "acl.proto";
 
 package cli;
 
@@ -65,6 +66,8 @@ message Route {
   optional uint32 next_hop_peer_id_latency_first = 12;
   optional int32 cost_latency_first = 13;
   optional int32 path_latency_latency_first = 14;
+
+  common.Ipv6Inet ipv6_addr = 15;
 }
 
 message PeerRoutePair {
@@ -170,6 +173,31 @@ service ConnectorManageRpc {
   rpc ManageConnector(ManageConnectorRequest) returns (ManageConnectorResponse);
 }
 
+message MappedListener {
+  common.Url url = 1;
+}
+
+message ListMappedListenerRequest {}
+
+message ListMappedListenerResponse { repeated MappedListener mappedlisteners = 1; }
+
+enum MappedListenerManageAction {
+  MAPPED_LISTENER_ADD = 0;
+  MAPPED_LISTENER_REMOVE = 1;
+}
+
+message ManageMappedListenerRequest {
+  MappedListenerManageAction action = 1;
+  common.Url url = 2;
+}
+
+message ManageMappedListenerResponse {}
+
+service MappedListenerManageRpc {
+  rpc ListMappedListener(ListMappedListenerRequest) returns (ListMappedListenerResponse);
+  rpc ManageMappedListener(ManageMappedListenerRequest) returns (ManageMappedListenerResponse);
+}
+
 message VpnPortalInfo {
   string vpn_type = 1;
   string client_config = 2;
@@ -223,4 +251,14 @@ message ListTcpProxyEntryResponse {
 service TcpProxyRpc {
   rpc ListTcpProxyEntry(ListTcpProxyEntryRequest)
       returns (ListTcpProxyEntryResponse);
+}
+
+message GetAclStatsRequest {}
+
+message GetAclStatsResponse {
+  acl.AclStats acl_stats = 1;
+}
+
+service AclManageRpc {
+  rpc GetAclStats(GetAclStatsRequest) returns (GetAclStatsResponse);
 }

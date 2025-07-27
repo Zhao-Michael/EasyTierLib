@@ -30,6 +30,11 @@ use crate::peers::rpc_service::PeerManagerRpcService;
 use crate::peers::{create_packet_recv_chan, recv_packet_from_chan, PacketRecvChanReceiver};
 use crate::proto::cli::VpnPortalRpc;
 use crate::proto::cli::{GetVpnPortalInfoRequest, GetVpnPortalInfoResponse, VpnPortalInfo};
+use crate::proto::cli::{
+    ListMappedListenerRequest, ListMappedListenerResponse, ManageMappedListenerRequest,
+    ManageMappedListenerResponse, MappedListener, MappedListenerManageAction,
+    MappedListenerManageRpc,
+};
 use crate::proto::common::TunnelInfo;
 use crate::proto::peer_rpc::PeerCenterRpcServer;
 use crate::proto::rpc_impl::standalone::{RpcServerHook, StandAloneServer};
@@ -89,8 +94,8 @@ impl IpProxy {
         self.tcp_proxy.start(true).await?;
         if let Err(e) = self.icmp_proxy.start().await {
             tracing::error!("start icmp proxy failed: {:?}", e);
-            if cfg!(not(target_os = "android")) {
-                // android may not support icmp proxy
+            if cfg!(not(any(target_os = "android", target_env = "ohos"))) {
+                // android and ohos not support icmp proxy
                 return Err(e);
             }
         }
@@ -266,6 +271,8 @@ impl Instance {
             global_ctx.clone(),
             peer_packet_sender.clone(),
         ));
+
+        peer_manager.set_allow_loopback_tunnel(false);
 
         let listener_manager = Arc::new(Mutex::new(ListenerManager::new(
             global_ctx.clone(),
@@ -477,14 +484,14 @@ impl Instance {
                         continue;
                     }
 
-                    #[cfg(not(target_os = "android"))]
+                    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
                     {
                         let mut new_nic_ctx = NicCtx::new(
                             global_ctx_c.clone(),
                             &peer_manager_c,
                             _peer_packet_receiver.clone(),
                         );
-                        if let Err(e) = new_nic_ctx.run(ip).await {
+                        if let Err(e) = new_nic_ctx.run(Some(ip), global_ctx_c.get_ipv6()).await {
                             tracing::error!(
                                 ?current_dhcp_ip,
                                 ?candidate_ipv4_addr,
@@ -519,6 +526,19 @@ impl Instance {
         });
     }
 
+    async fn run_quic_dst(&mut self) -> Result<(), Error> {
+        if !self.global_ctx.get_flags().enable_quic_proxy {
+            return Ok(());
+        }
+
+        let quic_dst = QUICProxyDst::new(self.global_ctx.clone())?;
+        quic_dst.start().await?;
+        self.global_ctx
+            .set_quic_proxy_port(Some(quic_dst.local_addr()?.port()));
+        self.quic_proxy_dst = Some(quic_dst);
+        Ok(())
+    }
+
     pub async fn run(&mut self) -> Result<(), Error> {
         self.listener_manager
             .lock()
@@ -531,25 +551,30 @@ impl Instance {
         Self::clear_nic_ctx(self.nic_ctx.clone(), self.peer_packet_receiver.clone()).await;
 
         if !self.global_ctx.config.get_flags().no_tun {
-            #[cfg(not(target_os = "android"))]
-            if let Some(ipv4_addr) = self.global_ctx.get_ipv4() {
-                let mut new_nic_ctx = NicCtx::new(
-                    self.global_ctx.clone(),
-                    &self.peer_manager,
-                    self.peer_packet_receiver.clone(),
-                );
-                new_nic_ctx.run(ipv4_addr).await?;
-                let ifname = new_nic_ctx.ifname().await;
-                Self::use_new_nic_ctx(
-                    self.nic_ctx.clone(),
-                    new_nic_ctx,
-                    Self::create_magic_dns_runner(
-                        self.peer_manager.clone(),
-                        ifname,
-                        ipv4_addr.clone(),
-                    ),
-                )
-                .await;
+            #[cfg(not(any(target_os = "android", target_env = "ohos")))]
+            {
+                let ipv4_addr = self.global_ctx.get_ipv4();
+                let ipv6_addr = self.global_ctx.get_ipv6();
+
+                // Only run if we have at least one IP address (IPv4 or IPv6)
+                if ipv4_addr.is_some() || ipv6_addr.is_some() {
+                    let mut new_nic_ctx = NicCtx::new(
+                        self.global_ctx.clone(),
+                        &self.peer_manager,
+                        self.peer_packet_receiver.clone(),
+                    );
+
+                    new_nic_ctx.run(ipv4_addr, ipv6_addr).await?;
+                    let ifname = new_nic_ctx.ifname().await;
+
+                    // Create Magic DNS runner only if we have IPv4
+                    let dns_runner = if let Some(ipv4) = ipv4_addr {
+                        Self::create_magic_dns_runner(self.peer_manager.clone(), ifname, ipv4)
+                    } else {
+                        None
+                    };
+                    Self::use_new_nic_ctx(self.nic_ctx.clone(), new_nic_ctx, dns_runner).await;
+                }
             }
         }
 
@@ -576,11 +601,16 @@ impl Instance {
         }
 
         if !self.global_ctx.get_flags().disable_quic_input {
-            let quic_dst = QUICProxyDst::new(self.global_ctx.clone())?;
-            quic_dst.start().await?;
-            self.global_ctx
-                .set_quic_proxy_port(Some(quic_dst.local_addr()?.port()));
-            self.quic_proxy_dst = Some(quic_dst);
+            if let Err(e) = self.run_quic_dst().await {
+                eprintln!(
+                    "quic input start failed: {:?} (some platforms may not support)",
+                    e
+                );
+            }
+        }
+
+        if let Some(acl) = self.global_ctx.config.get_acl() {
+            self.global_ctx.get_acl_filter().reload_rules(Some(&acl));
         }
 
         // run after tun device created, so listener can bind to tun device, which may be required by win 10
@@ -710,6 +740,56 @@ impl Instance {
         }
     }
 
+    fn get_mapped_listener_manager_rpc_service(
+        &self,
+    ) -> impl MappedListenerManageRpc<Controller = BaseController> + Clone {
+        #[derive(Clone)]
+        pub struct MappedListenerManagerRpcService(Arc<GlobalCtx>);
+
+        #[async_trait::async_trait]
+        impl MappedListenerManageRpc for MappedListenerManagerRpcService {
+            type Controller = BaseController;
+
+            async fn list_mapped_listener(
+                &self,
+                _: BaseController,
+                _request: ListMappedListenerRequest,
+            ) -> Result<ListMappedListenerResponse, rpc_types::error::Error> {
+                let mut ret = ListMappedListenerResponse::default();
+                let urls = self.0.config.get_mapped_listeners();
+                let mapped_listeners: Vec<MappedListener> = urls
+                    .into_iter()
+                    .map(|u| MappedListener {
+                        url: Some(u.into()),
+                    })
+                    .collect();
+                ret.mappedlisteners = mapped_listeners;
+                Ok(ret)
+            }
+
+            async fn manage_mapped_listener(
+                &self,
+                _: BaseController,
+                req: ManageMappedListenerRequest,
+            ) -> Result<ManageMappedListenerResponse, rpc_types::error::Error> {
+                let url: url::Url = req.url.ok_or(anyhow::anyhow!("url is empty"))?.into();
+
+                let urls = self.0.config.get_mapped_listeners();
+                let mut set_urls: HashSet<url::Url> = urls.into_iter().collect();
+                if req.action == MappedListenerManageAction::MappedListenerRemove as i32 {
+                    set_urls.remove(&url);
+                } else if req.action == MappedListenerManageAction::MappedListenerAdd as i32 {
+                    set_urls.insert(url);
+                }
+                let urls: Vec<url::Url> = set_urls.into_iter().collect();
+                self.0.config.set_mapped_listeners(Some(urls));
+                Ok(ManageMappedListenerResponse::default())
+            }
+        }
+
+        MappedListenerManagerRpcService(self.global_ctx.clone())
+    }
+
     async fn run_rpc_server(&mut self) -> Result<(), Error> {
         let Some(_) = self.global_ctx.config.get_rpc_portal() else {
             tracing::info!("rpc server not enabled, because rpc_portal is not set.");
@@ -722,12 +802,14 @@ impl Instance {
         let conn_manager = self.conn_manager.clone();
         let peer_center = self.peer_center.clone();
         let vpn_portal_rpc = self.get_vpn_portal_rpc_service();
+        let mapped_listener_manager_rpc = self.get_mapped_listener_manager_rpc_service();
 
         let s = self.rpc_server.as_mut().unwrap();
-        s.registry().register(
-            PeerManageRpcServer::new(PeerManagerRpcService::new(peer_mgr)),
-            "",
-        );
+        let peer_mgr_rpc_service = PeerManagerRpcService::new(peer_mgr.clone());
+        s.registry()
+            .register(PeerManageRpcServer::new(peer_mgr_rpc_service.clone()), "");
+        s.registry()
+            .register(AclManageRpcServer::new(peer_mgr_rpc_service), "");
         s.registry().register(
             ConnectorManageRpcServer::new(ConnectorManagerRpcService(conn_manager)),
             "",
@@ -737,6 +819,10 @@ impl Instance {
             .register(PeerCenterRpcServer::new(peer_center.get_rpc_service()), "");
         s.registry()
             .register(VpnPortalRpcServer::new(vpn_portal_rpc), "");
+        s.registry().register(
+            MappedListenerManageRpcServer::new(mapped_listener_manager_rpc),
+            "",
+        );
 
         if let Some(ip_proxy) = self.ip_proxy.as_ref() {
             s.registry().register(
@@ -796,11 +882,7 @@ impl Instance {
         self.peer_packet_receiver.clone()
     }
 
-    pub async fn clear_udp_socket(&self) {
-        self.udp_hole_puncher.lock().await.clear_udp_socket().await;
-    }
-
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
     pub async fn setup_nic_ctx_for_android(
         nic_ctx: ArcNicCtx,
         global_ctx: ArcGlobalCtx,
@@ -856,7 +938,7 @@ impl Drop for Instance {
             };
 
             let now = std::time::Instant::now();
-            while now.elapsed().as_secs() < 1 {
+            while now.elapsed().as_secs() < 10 {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 if pm.strong_count() == 0 {
                     tracing::info!(

@@ -6,6 +6,7 @@ use std::{
 
 use crate::common::config::ProxyNetworkConfig;
 use crate::common::token_bucket::TokenBucketManager;
+use crate::peers::acl_filter::AclFilter;
 use crate::proto::cli::PeerConnInfo;
 use crate::proto::common::{PeerFeatureFlag, PortForwardConfigPb};
 use crossbeam::atomic::AtomicCell;
@@ -61,6 +62,7 @@ pub struct GlobalCtx {
     event_bus: EventBus,
 
     cached_ipv4: AtomicCell<Option<cidr::Ipv4Inet>>,
+    cached_ipv6: AtomicCell<Option<cidr::Ipv6Inet>>,
     cached_proxy_cidrs: AtomicCell<Option<Vec<ProxyNetworkConfig>>>,
 
     ip_collector: Mutex<Option<Arc<IPCollector>>>,
@@ -80,6 +82,8 @@ pub struct GlobalCtx {
     quic_proxy_port: AtomicCell<Option<u16>>,
 
     token_bucket_manager: TokenBucketManager,
+
+    acl_filter: Arc<AclFilter>,
 }
 
 impl std::fmt::Debug for GlobalCtx {
@@ -107,7 +111,7 @@ impl GlobalCtx {
 
         let stun_info_collection = Arc::new(StunInfoCollector::new_with_default_servers());
 
-        let enable_exit_node = config_fs.get_flags().enable_exit_node;
+        let enable_exit_node = config_fs.get_flags().enable_exit_node || cfg!(target_env = "ohos");
         let proxy_forward_by_system = config_fs.get_flags().proxy_forward_by_system;
         let no_tun = config_fs.get_flags().no_tun;
 
@@ -124,6 +128,7 @@ impl GlobalCtx {
 
             event_bus,
             cached_ipv4: AtomicCell::new(None),
+            cached_ipv6: AtomicCell::new(None),
             cached_proxy_cidrs: AtomicCell::new(None),
 
             ip_collector: Mutex::new(Some(Arc::new(IPCollector::new(
@@ -145,6 +150,8 @@ impl GlobalCtx {
             quic_proxy_port: AtomicCell::new(None),
 
             token_bucket_manager: TokenBucketManager::new(),
+
+            acl_filter: Arc::new(AclFilter::new()),
         }
     }
 
@@ -189,6 +196,20 @@ impl GlobalCtx {
     pub fn set_ipv4(&self, addr: Option<cidr::Ipv4Inet>) {
         self.config.set_ipv4(addr);
         self.cached_ipv4.store(None);
+    }
+
+    pub fn get_ipv6(&self) -> Option<cidr::Ipv6Inet> {
+        if let Some(ret) = self.cached_ipv6.load() {
+            return Some(ret);
+        }
+        let addr = self.config.get_ipv6();
+        self.cached_ipv6.store(addr.clone());
+        return addr;
+    }
+
+    pub fn set_ipv6(&self, addr: Option<cidr::Ipv6Inet>) {
+        self.config.set_ipv6(addr);
+        self.cached_ipv6.store(None);
     }
 
     pub fn get_id(&self) -> uuid::Uuid {
@@ -300,6 +321,10 @@ impl GlobalCtx {
 
     pub fn token_bucket_manager(&self) -> &TokenBucketManager {
         &self.token_bucket_manager
+    }
+
+    pub fn get_acl_filter(&self) -> &Arc<AclFilter> {
+        &self.acl_filter
     }
 }
 

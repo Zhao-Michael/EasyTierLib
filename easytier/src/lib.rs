@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
-#[macro_use]
-extern crate rust_i18n;
+use std::io;
+
+use clap::Command;
+use clap_complete::Generator;
 
 mod arch;
 mod easytier_core;
@@ -24,8 +26,7 @@ mod helper;
 #[cfg(test)]
 mod tests;
 
-use crate::easytier_core::init_instance;
-use crate::helper::{clear_udp_socket, get_stats, get_token, run};
+use crate::helper::{get_stats, get_token, run};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::thread::sleep;
@@ -34,6 +35,10 @@ use std::time::Duration;
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name:&str) {
+    clap_complete::generate(generator, cmd, bin_name, &mut io::stdout());
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn start(config_path: *const c_char) {
     let c_str = unsafe {
@@ -41,14 +46,7 @@ pub extern "C" fn start(config_path: *const c_char) {
             .to_str()
             .unwrap_or("Error decoding config_path")
     };
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        init_instance(c_str).await;
-    });
     run(c_str);
-    rt.block_on(async {
-        clear_udp_socket().await;
-    });
 }
 
 #[unsafe(no_mangle)]
