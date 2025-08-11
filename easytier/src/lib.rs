@@ -14,6 +14,7 @@ mod vpn_portal;
 
 pub mod common;
 pub mod connector;
+pub mod instance_manager;
 pub mod launcher;
 pub mod instance_manager;
 pub mod peers;
@@ -35,7 +36,7 @@ use std::time::Duration;
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
 
-pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name:&str) {
+pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name: &str) {
     clap_complete::generate(generator, cmd, bin_name, &mut io::stdout());
 }
 
