@@ -16,7 +16,6 @@ pub mod common;
 pub mod connector;
 pub mod instance_manager;
 pub mod launcher;
-pub mod instance_manager;
 pub mod peers;
 pub mod proto;
 pub mod tunnel;
@@ -27,7 +26,7 @@ mod helper;
 #[cfg(test)]
 mod tests;
 
-use crate::helper::{get_stats, get_token, run};
+use crate::helper::{get_stats, get_token, is_running, run};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::thread::sleep;
@@ -61,6 +60,16 @@ pub extern "C" fn status() -> usize {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         result = get_stats().await as usize;
+    });
+    result
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn isrunning() -> bool {
+    let mut result: bool = false;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        result = is_running().await;
     });
     result
 }

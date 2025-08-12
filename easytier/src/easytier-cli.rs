@@ -19,7 +19,7 @@ use service_manager::*;
 use tabled::settings::Style;
 use tokio::time::timeout;
 
-use easytier::{
+use crate::{
     common::{
         config::PortForwardConfig,
         constants::EASYTIER_VERSION,

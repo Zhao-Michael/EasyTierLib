@@ -485,18 +485,11 @@ impl DirectConnectorManagerData {
                 self.global_ctx.get_network_name(),
             );
 
-            let ip_list = match rpc_stub
+            let ip_list = rpc_stub
                 .get_ip_list(BaseController::default(), GetIpListRequest {})
                 .await;
             let ip_list = handle_rpc_result(ip_list, dst_peer_id, &self.peer_black_list)
-                .with_context(|| format!("get ip list from peer {}", dst_peer_id))
-            {
-                Ok(ip_list) => ip_list,
-                Err(e) => {
-                    tracing::error!(?e, "failed to get ip list from peer");
-                    continue;
-                }
-            };
+                .with_context(|| format!("get ip list from peer {}", dst_peer_id))?;
 
             tracing::info!(ip_list = ?ip_list, dst_peer_id = ?dst_peer_id, "got ip list");
 

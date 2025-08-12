@@ -1,19 +1,21 @@
 #![allow(dead_code)]
 
-use rust_i18n::t;
+#[macro_use]
+extern crate rust_i18n;
+
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::ExitCode,
     sync::Arc,
 };
-use clap_complete::Shell;
+
 use anyhow::Context;
 use cidr::IpCidr;
 use clap::{CommandFactory, Parser};
-use crate::print_completions;
 
-use crate::{
+use clap_complete::Shell;
+use easytier::{
     common::{
         config::{
             get_avaliable_encrypt_methods, ConfigLoader, ConsoleLoggerConfig, FileLoggerConfig,
@@ -96,7 +98,7 @@ fn dump_profile(_cur_allocated: usize) {
 
 #[derive(Parser, Debug)]
 #[command(name = "easytier-core", author, version = EASYTIER_VERSION , about, long_about = None)]
-pub(crate) struct Cli {
+struct Cli {
     #[arg(
         short = 'w',
         long,
@@ -944,7 +946,7 @@ impl LoggingConfigLoader for &LoggingOptions {
 
 #[cfg(target_os = "windows")]
 fn win_service_set_work_dir(service_name: &std::ffi::OsString) -> anyhow::Result<()> {
-    use crate::common::constants::WIN_SERVICE_WORK_DIR_REG_KEY;
+    use easytier::common::constants::WIN_SERVICE_WORK_DIR_REG_KEY;
     use winreg::enums::*;
     use winreg::RegKey;
 
@@ -1053,7 +1055,7 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
     win_service_event_loop(stop_notify_recv, cli, status_handle);
 }
 
-pub(crate) async fn run_main(cli: Cli) -> anyhow::Result<()> {
+async fn run_main(cli: Cli) -> anyhow::Result<()> {
     init_logger(&cli.logging_options, false)?;
 
     if cli.config_server.is_some() {
@@ -1147,8 +1149,6 @@ pub(crate) async fn run_main(cli: Cli) -> anyhow::Result<()> {
         manager.run_network_instance(cfg, ConfigSource::Cli)?;
     }
 
-    let token = &crate::helper::get_token();
-
     tokio::select! {
         _ = manager.wait() => {
             let infos = manager.collect_network_infos()?;
@@ -1159,10 +1159,6 @@ pub(crate) async fn run_main(cli: Cli) -> anyhow::Result<()> {
             if !errs.is_empty() {
                 return Err(anyhow::anyhow!("some instances stopped with errors"));
             }
-        }
-        // 监听取消令牌
-        _ = token.cancelled() => {
-            println!("任务已取消");
         }
         _ = tokio::signal::ctrl_c() => {
             println!("ctrl-c received, exiting...");
@@ -1212,7 +1208,7 @@ fn memory_monitor() {
 }
 
 #[tokio::main(flavor = "current_thread")]
-pub(crate) async fn main() -> ExitCode {
+async fn main() -> ExitCode {
     let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en-US"));
     rust_i18n::set_locale(&locale);
     setup_panic_handler();
@@ -1239,7 +1235,7 @@ pub(crate) async fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Some(shell) = cli.gen_autocomplete {
         let mut cmd = Cli::command();
-        print_completions(shell, &mut cmd, "easytier-core");
+        easytier::print_completions(shell, &mut cmd, "easytier-core");
         return ExitCode::SUCCESS;
     }
     let mut ret_code = 0;
