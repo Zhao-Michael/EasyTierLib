@@ -72,6 +72,11 @@ pub(crate) fn run(path: &str) {
     rt.block_on(start_run(path));
 }
 
+pub(crate) async fn is_running() -> bool {
+    let guard = g_peermanager.read().await;
+    guard.is_some()
+}
+
 pub async fn get_stats() -> *mut u8 {
     #[derive(tabled::Tabled, serde::Serialize)]
     struct PeerTableItem {

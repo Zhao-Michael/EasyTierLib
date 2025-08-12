@@ -27,6 +27,12 @@ pub struct AclFilter {
     acl_enabled: Arc<AtomicBool>,
 }
 
+impl Default for AclFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AclFilter {
     pub fn new() -> Self {
         Self {
@@ -64,7 +70,7 @@ impl AclFilter {
     }
 
     /// Get current processor for processing packets
-    fn get_processor(&self) -> Arc<AclProcessor> {
+    pub fn get_processor(&self) -> Arc<AclProcessor> {
         self.acl_processor.load_full()
     }
 
@@ -75,8 +81,8 @@ impl AclFilter {
         let rules_stats = processor.get_rules_stats();
 
         AclStats {
-            global: global_stats.into_iter().map(|(k, v)| (k, v)).collect(),
-            conn_track: conn_track.iter().map(|x| x.value().clone()).collect(),
+            global: global_stats.into_iter().collect(),
+            conn_track: conn_track.iter().map(|x| *x.value()).collect(),
             rules: rules_stats,
         }
     }
@@ -160,7 +166,7 @@ impl AclFilter {
     }
 
     /// Process ACL result and log if needed
-    fn handle_acl_result(
+    pub fn handle_acl_result(
         &self,
         result: &AclResult,
         packet_info: &PacketInfo,

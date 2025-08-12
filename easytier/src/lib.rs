@@ -14,8 +14,8 @@ mod vpn_portal;
 
 pub mod common;
 pub mod connector;
-pub mod launcher;
 pub mod instance_manager;
+pub mod launcher;
 pub mod peers;
 pub mod proto;
 pub mod tunnel;
@@ -26,7 +26,7 @@ mod helper;
 #[cfg(test)]
 mod tests;
 
-use crate::helper::{get_stats, get_token, run};
+use crate::helper::{get_stats, get_token, is_running, run};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::thread::sleep;
@@ -35,7 +35,7 @@ use std::time::Duration;
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
 
-pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name:&str) {
+pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name: &str) {
     clap_complete::generate(generator, cmd, bin_name, &mut io::stdout());
 }
 
@@ -60,6 +60,16 @@ pub extern "C" fn status() -> usize {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         result = get_stats().await as usize;
+    });
+    result
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn isrunning() -> bool {
+    let mut result: bool = false;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        result = is_running().await;
     });
     result
 }
