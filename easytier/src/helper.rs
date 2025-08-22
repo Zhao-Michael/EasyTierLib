@@ -1,5 +1,4 @@
 use crate::easytier_core::{run_main, Cli};
-use crate::instance_manager::NetworkInstanceManager;
 use crate::peers::peer_manager::PeerManager;
 use crate::peers::rpc_service::PeerManagerRpcService;
 use crate::proto::cli::{list_peer_route_pair, NodeInfo, PeerManageRpc, ShowNodeInfoRequest};
@@ -24,6 +23,8 @@ lazy_static! {
     static ref g_token: std::sync::RwLock<CancellationToken> =
         std::sync::RwLock::new(CancellationToken::new());
 }
+
+static mut IS_RUNNING: i32 = 0;
 
 const SIZE: usize = 100 * 1024;
 
@@ -70,6 +71,20 @@ pub(crate) fn run(path: &str) {
     reset_token();
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(start_run(path));
+}
+
+pub(crate) fn is_running() -> bool {
+    unsafe { IS_RUNNING > 0 }
+}
+
+pub(crate) fn set_running_state(running: bool) {
+    unsafe {
+        if running {
+            IS_RUNNING = 1
+        } else {
+            IS_RUNNING = 0
+        }
+    }
 }
 
 pub async fn get_stats() -> *mut u8 {
