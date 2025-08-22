@@ -66,12 +66,7 @@ pub extern "C" fn status() -> usize {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn isrunning() -> bool {
-    let mut result: bool = false;
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        result = is_running().await;
-    });
-    result
+    is_running()
 }
 
 fn free_string(p: *mut c_char) {
