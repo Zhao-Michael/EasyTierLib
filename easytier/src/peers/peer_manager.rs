@@ -378,8 +378,6 @@ impl PeerManager {
     pub fn has_directly_connected_conn(&self, peer_id: PeerId) -> bool {
         if let Some(peer) = self.peers.get_peer_by_id(peer_id) {
             peer.has_directly_connected_conn()
-        } else if self.foreign_network_client.get_peer_map().has_peer(peer_id) {
-            true
         } else {
             self.foreign_network_client.get_peer_map().has_peer(peer_id)
         }

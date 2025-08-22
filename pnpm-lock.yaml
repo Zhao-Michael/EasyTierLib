@@ -929,20 +929,12 @@ packages:
     resolution: {integrity: sha512-vcyCLiVRN628U38c3PbahrhbbXrckrM9zpy0KZVlDk2Z0OnGwv8uQNNXP3twwGtfLsCf4gu3ci6FMIZnPaqZsw==}
     engines: {node: '>= 16'}
 
-  '@intlify/message-compiler@9.14.4':
-    resolution: {integrity: sha512-vcyCLiVRN628U38c3PbahrhbbXrckrM9zpy0KZVlDk2Z0OnGwv8uQNNXP3twwGtfLsCf4gu3ci6FMIZnPaqZsw==}
-    engines: {node: '>= 16'}
-
   '@intlify/shared@10.0.4':
     resolution: {integrity: sha512-ukFn0I01HsSgr3VYhYcvkTCLS7rGa0gw4A4AMpcy/A9xx/zRJy7PS2BElMXLwUazVFMAr5zuiTk3MQeoeGXaJg==}
     engines: {node: '>= 16'}
 
   '@intlify/shared@12.0.0-alpha.3':
     resolution: {integrity: sha512-ryaNYBvxQjyJUmVuBBg+HHUsmGnfxcEUPR0NCeG4/K9N2qtyFE35C80S15IN6iYFE2MGWLN7HfOSyg0MXZIc9w==}
-    engines: {node: '>= 16'}
-
-  '@intlify/shared@9.14.4':
-    resolution: {integrity: sha512-P9zv6i1WvMc9qDBWvIgKkymjY2ptIiQ065PjDv7z7fDqH3J/HBRBN5IoiR46r/ujRcU7hCuSIZWvCAFCyuOYZA==}
     engines: {node: '>= 16'}
 
   '@intlify/shared@9.14.4':
@@ -4455,16 +4447,9 @@ snapshots:
       '@intlify/shared': 9.14.4
       source-map-js: 1.2.1
 
-  '@intlify/message-compiler@9.14.4':
-    dependencies:
-      '@intlify/shared': 9.14.4
-      source-map-js: 1.2.1
-
   '@intlify/shared@10.0.4': {}
 
   '@intlify/shared@12.0.0-alpha.3': {}
-
-  '@intlify/shared@9.14.4': {}
 
   '@intlify/shared@9.14.4': {}
 

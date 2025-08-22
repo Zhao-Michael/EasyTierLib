@@ -44,4 +44,3 @@ easytier-gui/src-tauri/*.dll
 
 et.db*
 /easytier/config.toml
-/config.toml
