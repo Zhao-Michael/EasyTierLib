@@ -11,6 +11,8 @@ use cidr::IpCidr;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    common::stun::StunInfoCollector,
+    instance::dns_server::DEFAULT_ET_DNS_ZONE,
     proto::{
         acl::Acl,
         common::{CompressionAlgoPb, PortForwardConfigPb, SocketType},
@@ -50,6 +52,8 @@ pub fn gen_default_flags() -> Flags {
         foreign_relay_bps_limit: u64::MAX,
         multi_thread_count: 2,
         encryption_algorithm: "aes-gcm".to_string(),
+        disable_sym_hole_punching: false,
+        tld_dns_zone: DEFAULT_ET_DNS_ZONE.to_string(),
     }
 }
 
@@ -151,6 +155,7 @@ pub trait ConfigLoader: Send + Sync {
         mapped_cidr: Option<cidr::Ipv4Cidr>,
     ) -> Result<(), anyhow::Error>;
     fn remove_proxy_cidr(&self, cidr: cidr::Ipv4Cidr);
+    fn clear_proxy_cidrs(&self);
     fn get_proxy_cidrs(&self) -> Vec<ProxyNetworkConfig>;
 
     fn get_network_identity(&self) -> NetworkIdentity;
@@ -166,12 +171,6 @@ pub trait ConfigLoader: Send + Sync {
 
     fn get_mapped_listeners(&self) -> Vec<url::Url>;
     fn set_mapped_listeners(&self, listeners: Option<Vec<url::Url>>);
-
-    fn get_rpc_portal(&self) -> Option<SocketAddr>;
-    fn set_rpc_portal(&self, addr: SocketAddr);
-
-    fn get_rpc_portal_whitelist(&self) -> Option<Vec<IpCidr>>;
-    fn set_rpc_portal_whitelist(&self, whitelist: Option<Vec<IpCidr>>);
 
     fn get_vpn_portal_config(&self) -> Option<VpnPortalConfig>;
     fn set_vpn_portal_config(&self, config: VpnPortalConfig);
@@ -199,6 +198,12 @@ pub trait ConfigLoader: Send + Sync {
 
     fn get_udp_whitelist(&self) -> Vec<String>;
     fn set_udp_whitelist(&self, whitelist: Vec<String>);
+
+    fn get_stun_servers(&self) -> Option<Vec<String>>;
+    fn set_stun_servers(&self, servers: Option<Vec<String>>);
+
+    fn get_stun_servers_v6(&self) -> Option<Vec<String>>;
+    fn set_stun_servers_v6(&self, servers: Option<Vec<String>>);
 
     fn dump(&self) -> String;
 }
@@ -305,6 +310,8 @@ pub struct FileLoggerConfig {
     pub level: Option<String>,
     pub file: Option<String>,
     pub dir: Option<String>,
+    pub size_mb: Option<u64>,
+    pub count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
@@ -371,7 +378,7 @@ impl From<PortForwardConfig> for PortForwardConfigPb {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 struct Config {
     netns: Option<String>,
     hostname: Option<String>,
@@ -387,9 +394,6 @@ struct Config {
 
     peer: Option<Vec<PeerConfig>>,
     proxy_network: Option<Vec<ProxyNetworkConfig>>,
-
-    rpc_portal: Option<SocketAddr>,
-    rpc_portal_whitelist: Option<Vec<IpCidr>>,
 
     vpn_portal_config: Option<VpnPortalConfig>,
 
@@ -408,6 +412,8 @@ struct Config {
 
     tcp_whitelist: Option<Vec<String>>,
     udp_whitelist: Option<Vec<String>>,
+    stun_servers: Option<Vec<String>>,
+    stun_servers_v6: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -599,6 +605,11 @@ impl ConfigLoader for TomlConfigLoader {
         }
     }
 
+    fn clear_proxy_cidrs(&self) {
+        let mut locked_config = self.config.lock().unwrap();
+        locked_config.proxy_network = None;
+    }
+
     fn get_proxy_cidrs(&self) -> Vec<ProxyNetworkConfig> {
         self.config
             .lock()
@@ -673,22 +684,6 @@ impl ConfigLoader for TomlConfigLoader {
 
     fn set_mapped_listeners(&self, listeners: Option<Vec<url::Url>>) {
         self.config.lock().unwrap().mapped_listeners = listeners;
-    }
-
-    fn get_rpc_portal(&self) -> Option<SocketAddr> {
-        self.config.lock().unwrap().rpc_portal
-    }
-
-    fn set_rpc_portal(&self, addr: SocketAddr) {
-        self.config.lock().unwrap().rpc_portal = Some(addr);
-    }
-
-    fn get_rpc_portal_whitelist(&self) -> Option<Vec<IpCidr>> {
-        self.config.lock().unwrap().rpc_portal_whitelist.clone()
-    }
-
-    fn set_rpc_portal_whitelist(&self, whitelist: Option<Vec<IpCidr>>) {
-        self.config.lock().unwrap().rpc_portal_whitelist = whitelist;
     }
 
     fn get_vpn_portal_config(&self) -> Option<VpnPortalConfig> {
@@ -787,6 +782,22 @@ impl ConfigLoader for TomlConfigLoader {
         self.config.lock().unwrap().udp_whitelist = Some(whitelist);
     }
 
+    fn get_stun_servers(&self) -> Option<Vec<String>> {
+        self.config.lock().unwrap().stun_servers.clone()
+    }
+
+    fn set_stun_servers(&self, servers: Option<Vec<String>>) {
+        self.config.lock().unwrap().stun_servers = servers;
+    }
+
+    fn get_stun_servers_v6(&self) -> Option<Vec<String>> {
+        self.config.lock().unwrap().stun_servers_v6.clone()
+    }
+
+    fn set_stun_servers_v6(&self, servers: Option<Vec<String>>) {
+        self.config.lock().unwrap().stun_servers_v6 = servers;
+    }
+
     fn dump(&self) -> String {
         let default_flags_json = serde_json::to_string(&gen_default_flags()).unwrap();
         let default_flags_hashmap =
@@ -809,6 +820,12 @@ impl ConfigLoader for TomlConfigLoader {
 
         let mut config = self.config.lock().unwrap().clone();
         config.flags = Some(flag_map);
+        if config.stun_servers == Some(StunInfoCollector::get_default_servers()) {
+            config.stun_servers = None;
+        }
+        if config.stun_servers_v6 == Some(StunInfoCollector::get_default_servers_v6()) {
+            config.stun_servers_v6 = None;
+        }
         toml::to_string_pretty(&config).unwrap()
     }
 }
@@ -816,6 +833,39 @@ impl ConfigLoader for TomlConfigLoader {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn test_stun_servers_config() {
+        let config = TomlConfigLoader::default();
+        let stun_servers = config.get_stun_servers();
+        assert!(stun_servers.is_none());
+
+        // Test setting custom stun servers
+        let custom_servers = vec!["txt:stun.easytier.cn".to_string()];
+        config.set_stun_servers(Some(custom_servers.clone()));
+
+        let retrieved_servers = config.get_stun_servers();
+        assert_eq!(retrieved_servers.unwrap(), custom_servers);
+    }
+
+    #[test]
+    fn test_stun_servers_toml_parsing() {
+        let config_str = r#"
+instance_name = "test"
+stun_servers = [
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
+    "txt:stun.easytier.cn"
+]"#;
+
+        let config = TomlConfigLoader::new_from_str(config_str).unwrap();
+        let stun_servers = config.get_stun_servers().unwrap();
+
+        assert_eq!(stun_servers.len(), 3);
+        assert_eq!(stun_servers[0], "stun.l.google.com:19302");
+        assert_eq!(stun_servers[1], "stun1.l.google.com:19302");
+        assert_eq!(stun_servers[2], "txt:stun.easytier.cn");
+    }
 
     #[tokio::test]
     async fn full_example_test() {
