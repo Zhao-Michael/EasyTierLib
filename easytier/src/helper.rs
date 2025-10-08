@@ -1,19 +1,19 @@
-use crate::easytier_core::{run_main, Cli};
 use crate::peers::peer_manager::PeerManager;
 use crate::peers::rpc_service::PeerManagerRpcService;
-use crate::proto::cli::{list_peer_route_pair, NodeInfo, PeerManageRpc, ShowNodeInfoRequest};
 use crate::proto::rpc_types::controller::BaseController;
 use crate::utils::{cost_to_str, float_to_str, PeerRoutePair};
 use cidr::Ipv4Inet;
-use clap::Parser;
 use humansize::format_size;
 use lazy_static::lazy_static;
 use std::alloc::{alloc_zeroed, Layout};
 use std::ptr;
 use std::str::FromStr;
 use std::sync::Arc;
+use clap::Parser;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use crate::easytier_core::{run_main, Cli};
+use crate::proto::api::instance::{list_peer_route_pair, NodeInfo, PeerManageRpc, ShowNodeInfoRequest};
 
 lazy_static! {
     pub static ref g_peermanager: RwLock<Option<Arc<PeerManager>>> = RwLock::new(None);
