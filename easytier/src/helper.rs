@@ -1,19 +1,24 @@
+use crate::easytier_cli::{CommandHandler, InstanceSelectArgs};
+use crate::easytier_core::{run_main, Cli};
 use crate::peers::peer_manager::PeerManager;
 use crate::peers::rpc_service::PeerManagerRpcService;
+use crate::proto::api::instance::{
+    list_peer_route_pair, InstanceIdentifier, NodeInfo, PeerManageRpc, ShowNodeInfoRequest,
+};
+use crate::proto::rpc_impl::standalone::StandAloneClient;
 use crate::proto::rpc_types::controller::BaseController;
+use crate::tunnel::tcp::TcpTunnelConnector;
 use crate::utils::{cost_to_str, float_to_str, PeerRoutePair};
 use cidr::Ipv4Inet;
+use clap::Parser;
 use humansize::format_size;
 use lazy_static::lazy_static;
 use std::alloc::{alloc_zeroed, Layout};
 use std::ptr;
 use std::str::FromStr;
 use std::sync::Arc;
-use clap::Parser;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use crate::easytier_core::{run_main, Cli};
-use crate::proto::api::instance::{list_peer_route_pair, NodeInfo, PeerManageRpc, ShowNodeInfoRequest};
 
 lazy_static! {
     pub static ref g_peermanager: RwLock<Option<Arc<PeerManager>>> = RwLock::new(None);
@@ -40,7 +45,7 @@ fn get_buffer() -> *mut u8 {
     }
 }
 
-fn write_json(s: &str) {
+pub fn write_json(s: &str) {
     let ptr = get_buffer();
     unsafe {
         ptr::write_bytes(ptr, 0, SIZE);
@@ -212,4 +217,31 @@ async fn start_run(path: &str) -> u8 {
     }
 
     ret_code
+}
+
+type RpcClient = StandAloneClient<TcpTunnelConnector>;
+
+pub fn remote_status() -> *mut u8 {
+    let client = RpcClient::new(TcpTunnelConnector::new(
+        format!("tcp://{}:{}", "127.0.0.1", "15888")
+            .parse()
+            .unwrap(),
+    ));
+    let handler = CommandHandler {
+        client: tokio::sync::Mutex::new(client),
+        verbose: false,
+        output_format: &crate::easytier_cli::OutputFormat::Json,
+        instance_selector: InstanceIdentifier::from(&InstanceSelectArgs {
+            id: None,
+            name: None,
+        }),
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    rt.block_on(async {
+        _ = handler.handle_peer_list().await.is_ok();
+    });
+
+    unsafe { BUF_PTR }
 }
