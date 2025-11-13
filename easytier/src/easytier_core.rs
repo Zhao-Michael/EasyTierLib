@@ -1233,9 +1233,9 @@ pub(crate) async fn run_main(cli: Cli) -> anyhow::Result<()> {
         _ = token.cancelled() => {
             println!("任务已取消");
         }
-        _ = tokio::signal::ctrl_c() => {
-            println!("ctrl-c received, exiting...");
-        }
+        // _ = tokio::signal::ctrl_c() => {
+        //     println!("ctrl-c received, exiting...");
+        // }
     }
     Ok(())
 }

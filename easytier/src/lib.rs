@@ -6,6 +6,7 @@ use clap::Command;
 use clap_complete::Generator;
 
 mod arch;
+mod easytier_cli;
 mod easytier_core;
 mod gateway;
 pub mod instance;
@@ -27,7 +28,7 @@ mod helper;
 #[cfg(test)]
 mod tests;
 
-use crate::helper::{get_stats, get_token, is_running, run};
+use crate::helper::{get_stats, get_token, is_running, remote_status, run};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::thread::sleep;
@@ -66,6 +67,11 @@ pub extern "C" fn status() -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rstatus() -> usize {
+    remote_status() as usize
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn isrunning() -> bool {
     is_running()
 }
@@ -95,6 +101,6 @@ pub(crate) fn main() {
             start(CString::new(path).unwrap().as_ptr());
         }
 
-        sleep(Duration::from_secs(5));
+         sleep(Duration::from_secs(5));
     }
 }
