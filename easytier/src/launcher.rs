@@ -32,6 +32,7 @@ use tokio::{
     sync::{broadcast, mpsc},
     task::JoinSet,
 };
+use crate::helper::{g_peermanager, set_running_state};
 
 pub type MyNodeInfo = crate::proto::api::manage::MyNodeInfo;
 
@@ -149,6 +150,12 @@ impl EasyTierLauncher {
         let mut instance = Instance::new(cfg);
         let mut tasks = JoinSet::new();
 
+        {
+            set_running_state(true);
+            let mut guard = g_peermanager.write().await;
+            *guard = Some(instance.get_peer_manager());
+        }
+
         // Subscribe to global context events
         let global_ctx = instance.get_global_ctx();
         let data_c = data.clone();
@@ -186,6 +193,12 @@ impl EasyTierLauncher {
         drop(api_service);
 
         stop_signal.notified().await;
+
+        {
+            set_running_state(false);
+            let mut guard = g_peermanager.write().await;
+            *guard = None;
+        }
 
         tasks.abort_all();
         drop(tasks);

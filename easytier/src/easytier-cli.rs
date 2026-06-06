@@ -11,13 +11,13 @@ use std::{
     vec,
 };
 
+use crate::ShellType;
 use anyhow::Context;
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cidr::Ipv4Inet;
 use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, builder::BoolishValueParser};
 use dashmap::DashMap;
-use easytier::ShellType;
 use humansize::format_size;
 use rust_i18n::t;
 use service_manager::*;
@@ -25,10 +25,11 @@ use tabled::settings::{Disable, Modify, Style, Width, location::ByColumnName, ob
 use terminal_size::{Width as TerminalWidth, terminal_size};
 use unicode_width::UnicodeWidthStr;
 
-use easytier::service_manager::{Service, ServiceInstallOptions};
+use crate::service_manager::{Service, ServiceInstallOptions};
 use tokio::time::timeout;
 
-use easytier::{
+use crate::helper::write_json;
+use crate::{
     common::{
         constants::EASYTIER_VERSION,
         stun::{StunInfoCollector, StunInfoCollectorTrait},
@@ -158,18 +159,18 @@ enum SubCommand {
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
-enum OutputFormat {
+pub enum OutputFormat {
     Table,
     Json,
 }
 
 #[derive(Parser, Debug)]
-struct InstanceSelectArgs {
+pub struct InstanceSelectArgs {
     #[arg(short = 'i', long = "instance-id", help = "the instance id")]
-    id: Option<uuid::Uuid>,
+    pub(crate) id: Option<uuid::Uuid>,
 
     #[arg(short = 'n', long = "instance-name", help = "the instance name")]
-    name: Option<String>,
+    pub(crate) name: Option<String>,
 }
 
 impl From<&InstanceSelectArgs> for InstanceIdentifier {
@@ -490,7 +491,7 @@ struct InstallArgs {
 type Error = anyhow::Error;
 
 #[derive(Clone, Debug)]
-struct InstanceTarget {
+pub(crate) struct InstanceTarget {
     identifier: InstanceIdentifier,
     instance_id: String,
     instance_name: String,
@@ -525,14 +526,14 @@ impl<T> InstanceResult<T> {
     }
 }
 
-struct CommandHandler<'a> {
-    client: Arc<tokio::sync::Mutex<RpcClient>>,
-    verbose: bool,
-    output_format: &'a OutputFormat,
-    no_trunc: bool,
-    instance_select: &'a InstanceSelectArgs,
-    instance_selector: InstanceIdentifier,
-    resolved_target: Option<InstanceTarget>,
+pub struct CommandHandler<'a> {
+    pub(crate) client: Arc<tokio::sync::Mutex<RpcClient>>,
+    pub(crate) verbose: bool,
+    pub(crate) output_format: &'a OutputFormat,
+    pub(crate) no_trunc: bool,
+    pub(crate) instance_select: &'a InstanceSelectArgs,
+    pub(crate) instance_selector: InstanceIdentifier,
+    pub(crate) resolved_target: Option<InstanceTarget>,
 }
 
 type RpcClient = StandAloneClient<TcpTunnelConnector>;
@@ -759,7 +760,8 @@ impl<'a> CommandHandler<'a> {
         results: Vec<InstanceResult<T>>,
     ) -> Result<(), Error> {
         if results.len() == 1 {
-            println!("{}", serde_json::to_string_pretty(&results[0].value)?);
+            let json = serde_json::to_string_pretty(&results[0].value)?;
+            write_json(&*json);
             return Ok(());
         }
 
@@ -776,7 +778,8 @@ impl<'a> CommandHandler<'a> {
                 }))
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        println!("{}", serde_json::to_string_pretty(&wrapped)?);
+        let json = serde_json::to_string_pretty(&wrapped)?;
+        write_json(&*json);
         Ok(())
     }
 
@@ -1304,7 +1307,7 @@ impl<'a> CommandHandler<'a> {
         .await
     }
 
-    async fn handle_peer_list(&self) -> Result<(), Error> {
+    pub(crate) async fn handle_peer_list(&self) -> Result<(), Error> {
         #[derive(tabled::Tabled, serde::Serialize)]
         struct PeerTableItem {
             #[tabled(rename = "ipv4")]
@@ -1342,7 +1345,7 @@ impl<'a> CommandHandler<'a> {
                     cidr: route.ipv4_addr.map(|ip| ip.to_string()).unwrap_or_default(),
                     ipv4: route
                         .ipv4_addr
-                        .map(|ip: easytier::proto::common::Ipv4Inet| ip.address.unwrap_or_default())
+                        .map(|ip: crate::proto::common::Ipv4Inet| ip.address.unwrap_or_default())
                         .map(|ip| ip.to_string())
                         .unwrap_or_default(),
                     hostname: route.hostname.clone(),
@@ -1490,7 +1493,7 @@ impl<'a> CommandHandler<'a> {
             local_provider: Option<ProviderLeaseSection>,
         }
 
-        fn fmt_ipv6_inet(value: Option<easytier::proto::common::Ipv6Inet>) -> String {
+        fn fmt_ipv6_inet(value: Option<crate::proto::common::Ipv6Inet>) -> String {
             value
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string())
@@ -3200,10 +3203,10 @@ async fn main() -> Result<(), Error> {
         SubCommand::GenAutocomplete { shell } => {
             let mut cmd = Cli::command();
             if let Some(shell) = shell.to_shell() {
-                easytier::print_completions(shell, &mut cmd, "easytier-cli");
+                crate::print_completions(shell, &mut cmd, "easytier-cli");
             } else {
                 // Handle Nushell
-                easytier::print_nushell_completions(&mut cmd, "easytier-cli");
+                crate::print_nushell_completions(&mut cmd, "easytier-cli");
             }
         }
     }

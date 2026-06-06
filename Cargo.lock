@@ -2287,6 +2287,7 @@ dependencies = [
  "indoc",
  "itertools 0.14.0",
  "kcp-sys",
+ "lazy_static",
  "machine-uid",
  "maplit",
  "mimalloc",

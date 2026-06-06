@@ -85,7 +85,7 @@ fn dump_profile(_cur_allocated: usize) {
 
 #[derive(Parser, Debug)]
 #[command(name = "easytier-core", author, version = EASYTIER_VERSION , about, long_about = None)]
-struct Cli {
+pub struct Cli {
     #[arg(
         short = 'w',
         long,
@@ -1349,9 +1349,9 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
     win_service_event_loop(stop_notify_recv, cli, status_handle);
 }
 
-async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     defer!(dump_profile(0););
-    log::init(&cli.logging_options, true)?;
+    // log::init(&cli.logging_options, false)?;
 
     let manager = Arc::new(NetworkInstanceManager::new().with_config_path(cli.config_dir.clone()));
 
@@ -1497,6 +1497,8 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
     #[cfg(not(unix))]
     let sigterm = std::future::pending::<()>();
 
+    let token = &crate::helper::get_token();
+
     tokio::select! {
         _ = manager.wait() => {
             let infos = manager.collect_network_infos().await?;
@@ -1505,6 +1507,10 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
                 .filter_map(|info| info.error_msg).next().is_some() {
                 return Err(anyhow::anyhow!("some instances stopped with errors"));
             }
+        }
+        // 监听取消令牌
+        _ = token.cancelled() => {
+            println!("任务已取消");
         }
         _ = tokio::signal::ctrl_c() => {
             log::info!("ctrl-c received, exiting...");
