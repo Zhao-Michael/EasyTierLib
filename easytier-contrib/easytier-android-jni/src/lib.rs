@@ -9,7 +9,10 @@
 //! - `parseConfig(config)`: validate TOML config text.
 //! - `runNetworkInstance(config)`: start a local network instance.
 //! - `retainNetworkInstance(instanceNames)`: retain named instances and stop the rest.
+//! - `deleteNetworkInstance(instanceName)`: stop exactly one named instance.
+//! - `listInstances()`: return running instance names and IDs as JSON.
 //! - `collectNetworkInfos()`: return running instance info as a JSON string.
+//! - `callJsonRpc(...)`: call an exposed EasyTier RPC service with JSON payload.
 //!
 //! Config server client APIs:
 //! - `startConfigServerClient(url, hostname, machineId, secureMode, callback)`:
@@ -19,10 +22,11 @@
 //!
 //! Error API:
 //! - `getLastError()`: return the latest FFI/JNI error string for the calling thread.
-
+//!
 mod callback;
 mod config_server_api;
 mod error;
+mod json_rpc_api;
 mod logger;
 mod network_api;
 mod strings;
@@ -91,7 +95,7 @@ pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_runNetworkInstance(
 /// `EasyTierJNI.retainNetworkInstance(instanceNames: Array<String>?): Int`
 ///
 /// Passing `null` or an empty array stops all instances. Null elements inside a
-/// non-empty array are skipped. On failure this returns `-1` and throws
+/// non-empty array are invalid. On failure this returns `-1` and throws
 /// `RuntimeException`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_retainNetworkInstance(
@@ -101,6 +105,23 @@ pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_retainNetworkInstance(
 ) -> jint {
     logger::init();
     network_api::retain_network_instance_jni(env, class, instance_names)
+}
+
+/// Stop exactly one named network instance without affecting other instances.
+///
+/// Java signature:
+/// `EasyTierJNI.deleteNetworkInstance(instanceName: String): Int`
+///
+/// An unknown name is a no-op. On failure this returns `-1` and throws
+/// `RuntimeException`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_deleteNetworkInstance(
+    env: JNIEnv,
+    class: JClass,
+    instance_name: JString,
+) -> jint {
+    logger::init();
+    network_api::delete_network_instance_jni(env, class, instance_name)
 }
 
 /// Collect running network instance information.
@@ -119,6 +140,53 @@ pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_collectNetworkInfos(
 ) -> jstring {
     logger::init();
     network_api::collect_network_infos_jni(env, class, max_length)
+}
+
+/// List running network instance names and IDs.
+///
+/// Java signature:
+/// `EasyTierJNI.listInstances(maxLength: Int): String?`
+///
+/// Returns a JSON object whose keys are instance names and whose values are
+/// instance ID strings. On failure this returns null and throws
+/// `RuntimeException`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_listInstances(
+    env: JNIEnv,
+    class: JClass,
+    max_length: jint,
+) -> jstring {
+    logger::init();
+    network_api::list_instances_jni(env, class, max_length)
+}
+
+/// Call an exposed EasyTier RPC method using protobuf JSON.
+///
+/// Java signature:
+/// `EasyTierJNI.callJsonRpc(serviceName, methodName, domainName, payloadJson): String?`
+///
+/// Instance lifecycle management RPCs are intentionally not exposed here. Use
+/// the dedicated EasyTierJNI instance APIs for start/retain/delete/collect.
+/// `payloadJson` must include any `instance` selector required by the target
+/// RPC. On failure this returns null and throws `RuntimeException`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_easytier_jni_EasyTierJNI_callJsonRpc(
+    env: JNIEnv,
+    class: JClass,
+    service_name: JString,
+    method_name: JString,
+    domain_name: JString,
+    payload_json: JString,
+) -> jstring {
+    logger::init();
+    json_rpc_api::call_json_rpc_jni(
+        env,
+        class,
+        service_name,
+        method_name,
+        domain_name,
+        payload_json,
+    )
 }
 
 /// Return the latest FFI/JNI error string for the calling thread.

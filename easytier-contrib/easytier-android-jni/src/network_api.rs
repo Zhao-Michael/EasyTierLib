@@ -2,8 +2,8 @@ use std::{ffi::CStr, ptr};
 
 use easytier::proto::api::manage::{NetworkInstanceRunningInfo, NetworkInstanceRunningInfoMap};
 use easytier_ffi::{
-    KeyValuePair, collect_network_infos, parse_config, retain_network_instance,
-    run_network_instance, set_tun_fd,
+    KeyValuePair, collect_network_infos, delete_network_instance, free_string, list_instance,
+    parse_config, retain_network_instance, run_network_instance, set_tun_fd,
 };
 use jni::JNIEnv;
 use jni::objects::{JClass, JObjectArray, JString};
@@ -76,6 +76,30 @@ pub(crate) fn run_network_instance_jni(mut env: JNIEnv, _class: JClass, config: 
     }
 }
 
+pub(crate) fn delete_network_instance_jni(
+    mut env: JNIEnv,
+    _class: JClass,
+    instance_name: JString,
+) -> jint {
+    let instance_name = match jstring_to_cstring(&mut env, &instance_name) {
+        Ok(name) => name,
+        Err(error) => {
+            throw_exception(&mut env, &format!("Invalid instance name: {error}"));
+            return -1;
+        }
+    };
+    let instance_names = [instance_name.as_ptr()];
+    unsafe {
+        let result = delete_network_instance(instance_names.as_ptr(), instance_names.len());
+        if result != 0
+            && let Some(error) = get_last_error()
+        {
+            throw_exception(&mut env, &error);
+        }
+        result
+    }
+}
+
 pub(crate) fn retain_network_instance_jni(
     mut env: JNIEnv,
     _class: JClass,
@@ -113,7 +137,11 @@ pub(crate) fn retain_network_instance_jni(
         };
 
         if java_string.is_null() {
-            continue;
+            throw_exception(
+                &mut env,
+                &format!("Invalid instance name at index {}: null", i),
+            );
+            return -1;
         }
 
         let jstring = JString::from(java_string);
@@ -186,16 +214,18 @@ pub(crate) fn collect_network_infos_jni(
                 break;
             }
 
-            let key = CStr::from_ptr(key_ptr).to_string_lossy();
-            let val = CStr::from_ptr(val_ptr).to_string_lossy();
-            let value = match serde_json::from_str::<NetworkInstanceRunningInfo>(val.as_ref()) {
+            let key = CStr::from_ptr(key_ptr).to_string_lossy().into_owned();
+            let val = CStr::from_ptr(val_ptr).to_string_lossy().into_owned();
+            free_string(key_ptr);
+            free_string(val_ptr);
+            let value = match serde_json::from_str::<NetworkInstanceRunningInfo>(&val) {
                 Ok(v) => v,
                 Err(_) => {
                     throw_exception(&mut env, "Failed to parse JSON");
                     continue;
                 }
             };
-            ret.map.insert(key.to_string(), value);
+            ret.map.insert(key, value);
         }
 
         let json_str = serde_json::to_string(&ret).unwrap_or_else(|_| "{}".to_string());
@@ -203,6 +233,51 @@ pub(crate) fn collect_network_infos_jni(
             Ok(jstr) => jstr.into_raw(),
             Err(_) => {
                 throw_exception(&mut env, "Failed to create JSON string");
+                ptr::null_mut()
+            }
+        }
+    }
+}
+
+pub(crate) fn list_instances_jni(mut env: JNIEnv, _class: JClass, max_length: jint) -> jstring {
+    let max_length = max_length.max(0) as usize;
+    let mut infos = vec![
+        KeyValuePair {
+            key: ptr::null(),
+            value: ptr::null(),
+        };
+        max_length
+    ];
+
+    unsafe {
+        let count = list_instance(infos.as_mut_ptr(), max_length);
+        if count < 0 {
+            if let Some(error) = get_last_error() {
+                throw_exception(&mut env, &error);
+            }
+            return ptr::null_mut();
+        }
+
+        let mut ret = serde_json::Map::new();
+        for info in infos.iter().take(count as usize) {
+            let key_ptr = info.key;
+            let val_ptr = info.value;
+            if key_ptr.is_null() || val_ptr.is_null() {
+                break;
+            }
+
+            let key = CStr::from_ptr(key_ptr).to_string_lossy().into_owned();
+            let val = CStr::from_ptr(val_ptr).to_string_lossy().into_owned();
+            free_string(key_ptr);
+            free_string(val_ptr);
+            ret.insert(key, serde_json::Value::String(val));
+        }
+
+        let json_str = serde_json::Value::Object(ret).to_string();
+        match env.new_string(&json_str) {
+            Ok(jstr) => jstr.into_raw(),
+            Err(_) => {
+                throw_exception(&mut env, "Failed to create instance list JSON string");
                 ptr::null_mut()
             }
         }

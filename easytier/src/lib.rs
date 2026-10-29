@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[cfg(feature = "management")]
 use std::ffi::{CStr, CString, c_char};
 use std::io;
 
@@ -8,29 +9,34 @@ use clap_complete::{Generator, Shell};
 
 mod arch;
 mod gateway;
+mod host_runtime;
 pub mod instance;
-mod peer_center;
 mod vpn_portal;
 
 pub mod common;
-pub mod connector;
+#[cfg(feature = "management")]
 pub mod core;
+#[cfg(all(feature = "management", feature = "cli"))]
 pub mod helper;
-pub mod instance_manager;
-pub mod launcher;
-pub mod peers;
+#[cfg(feature = "upnp")]
+pub(crate) mod igd_next;
 pub mod proto;
+#[cfg(feature = "management-rpc")]
 pub mod rpc_service;
+#[cfg(feature = "management")]
 pub mod service_manager;
+pub(crate) mod socket;
+pub mod socket_protector;
 pub mod tunnel;
 pub mod utils;
+#[cfg(feature = "web-client")]
 pub mod web_client;
+
+#[cfg(all(feature = "management", feature = "cli"))]
 use crate::helper::{get_stats, get_token, is_running, remote_status, run};
 
 #[cfg(test)]
 mod tests;
-#[path = "easytier-cli.rs"]
-mod easytier_cli;
 
 pub const VERSION: &str = common::constants::EASYTIER_VERSION;
 rust_i18n::i18n!("locales", fallback = "en");
@@ -65,12 +71,14 @@ pub fn print_completions<G: Generator>(generator: G, cmd: &mut Command, bin_name
 pub fn print_nushell_completions(cmd: &mut Command, bin_name: &str) {
     clap_complete::generate(
         clap_complete_nushell::Nushell,
-        cmd,
-        bin_name,
+        cmd, bin_name,
         &mut io::stdout(),
     );
 }
 
+// ===== DLL (cdylib) C ABI, kept for compatibility with EasyTier.dll consumers =====
+
+#[cfg(all(feature = "management", feature = "cli"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn start(config_path: *const c_char) {
     let c_str = unsafe {
@@ -81,11 +89,13 @@ pub extern "C" fn start(config_path: *const c_char) {
     run(c_str);
 }
 
+#[cfg(all(feature = "management", feature = "cli"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn stop() {
     get_token().cancel();
 }
 
+#[cfg(all(feature = "management", feature = "cli"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn status() -> usize {
     let mut result: usize = 0;
@@ -96,16 +106,19 @@ pub extern "C" fn status() -> usize {
     result
 }
 
+#[cfg(all(feature = "management", feature = "cli"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn rstatus() -> usize {
     remote_status() as usize
 }
 
+#[cfg(all(feature = "management", feature = "cli"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn isrunning() -> bool {
     is_running()
 }
 
+#[cfg(all(feature = "management", feature = "cli"))]
 fn free_string(p: *mut c_char) {
     unsafe {
         if p.is_null() {
